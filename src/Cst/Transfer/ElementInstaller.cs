@@ -522,8 +522,10 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         };
         var colItems = (JsonObject)q["Columns"]!["Items"]!;
         colItems["Id"] = Col("Id");
+        // Aliases must not equal a column name: on 8.3 an image lookup selected as "Image32.Id" under the alias
+        // "Image32" fails with "An item with the same key has already been added".
         foreach (var c in columns.Where(c => c.DsType != null && c.Name != "Id"))
-            colItems[c.Name] = Col(c.DsType is 10 or 16 ? c.Name + ".Id" : c.Name);
+            colItems[ColumnAlias(c)] = Col(c.DsType is 10 or 16 ? c.Name + ".Id" : c.Name);
         var filters = new JsonObject();
         int i = 0;
         foreach (var k in keys)
@@ -545,7 +547,7 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         var previous = new JsonObject();
         foreach (var c in columns.Where(c => c.DsType != null && c.Name != "Id"))
         {
-            var v = r[c.Name];
+            var v = r[ColumnAlias(c)];
             JsonNode? value = v is JsonObject lookup ? lookup["value"]?.DeepClone() : v?.DeepClone();
             if (c.DsType is 0 or 10 or 16 && (value == null || value.ToString() == "" || value.ToString() == Guid.Empty.ToString())) value = null;
             previous[c.Name] = new JsonObject
@@ -556,6 +558,8 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         }
         return (Guid.Parse(r["Id"]!.ToString()), previous);
     }
+
+    private static string ColumnAlias(DataColumn c) => "cst_" + c.Name;
 
     private static JsonObject ColumnValuesQuery(string entity, int operation, Dictionary<DataColumn, object?> values, Guid? id)
     {

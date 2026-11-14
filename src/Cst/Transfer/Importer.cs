@@ -255,6 +255,9 @@ public sealed class Importer(CreatioClient client)
                     Log.Info($"[{t.Name}] importing {item.Name} ({ShortManager(item.Manager)}, step {item.Order + 1})...");
                     await client.ImportSchemaAsync(t.UId, item.Name, mdByItem[item.UId]);
                     if (item.Manager == "EntitySchemaManager") entities.Add(item.UId);
+                    if (item.Manager == "SourceCodeSchemaManager"
+                        && await client.EnsureSourceCodeBodyAsync(item.UId, item.Name, mdByItem[item.UId]))
+                        Log.Info($"  {item.Name}: import kept the old code; saved through the source code designer");
                 }
             }
             if (entities.Count > 0)

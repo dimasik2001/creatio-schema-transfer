@@ -191,6 +191,9 @@ static class Cli
             await client.ImportSchemaAsync(Guid.Parse(b["packageUId"]!.ToString()), b["name"]!.ToString(), md);
             if (b["manager"]?.ToString() == "EntitySchemaManager" && Guid.TryParse(b["uId"]?.ToString(), out var uid))
                 entities.Add(uid);
+            if (b["manager"]?.ToString() == "SourceCodeSchemaManager" && Guid.TryParse(b["uId"]?.ToString(), out var codeUId)
+                && await client.EnsureSourceCodeBodyAsync(codeUId, b["name"]!.ToString(), md))
+                Log.Info($"  {b["name"]}: import kept the code; restored through the source code designer");
             restored.Add($"schema {b["package"]}/{b["name"]}");
         }
         if (entities.Count > 0 && await client.UpdateDbStructureAsync(entities) is { } msg) Log.Warn($"UpdateDBStructure: {msg}");

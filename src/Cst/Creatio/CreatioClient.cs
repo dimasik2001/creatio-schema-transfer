@@ -142,9 +142,21 @@ public sealed class CreatioClient : IDisposable
         using var resp = await PostRawAsync("ServiceModel/WorkspaceExplorerService.svc/ExportSchema",
             new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
         var bytes = await resp.Content.ReadAsByteArrayAsync();
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // One schema comes back as the .md itself, several as a zip of .md files.
+        var list = body.Select(n => n!["name"]!.ToString()).ToList();
+        if (resp.IsSuccessStatusCode && list.Count == 1 && !(bytes.Length >= 2 && bytes[0] == 'P' && bytes[1] == 'K'))
+        {
+            var text = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true).ReadToEnd();
+            if (text.TrimStart().StartsWith('{') && CreatioMd.Parse(text)?["Name"]?.ToString() is { } mdName
+                && mdName.Equals(list[0], StringComparison.OrdinalIgnoreCase))
+            {
+                result[list[0]] = text;
+                return result;
+            }
+        }
         if (!resp.IsSuccessStatusCode || bytes.Length < 4 || bytes[0] != 'P' || bytes[1] != 'K')
             throw new CreatioException($"ExportSchema: HTTP {(int)resp.StatusCode} {Shorten(Encoding.UTF8.GetString(bytes))}");
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         using var zip = new System.IO.Compression.ZipArchive(new MemoryStream(bytes));
         foreach (var e in zip.Entries)
         {
@@ -167,6 +179,52 @@ public sealed class CreatioClient : IDisposable
             new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
         var text = await resp.Content.ReadAsStringAsync();
         EnsureBaseResponse(resp, text, $"ImportWorkspaceItem({schemaName})");
+    }
+
+    /// <summary>
+    /// Makes sure a source code schema on the stand has the body from its .md export. Core 8.3 answers
+    /// ImportWorkspaceItem of an existing C# schema in an assembly package with success and a new ModifiedOn, but
+    /// keeps the old body. The Configuration source code designer (SourceCodeSchemaDesignerService) saves it the way
+    /// the UI does. Returns true when the designer had to save it; throws when the body is still wrong afterwards.
+    /// </summary>
+    public async Task<bool> EnsureSourceCodeBodyAsync(Guid schemaUId, string schemaName, string md)
+    {
+        string? expected;
+        try { expected = CreatioMd.Parse(md)?["SourceCode"]?.ToString(); }
+        catch (System.Text.Json.JsonException) { expected = null; }
+        if (expected == null) throw new CreatioException($"{schemaName}: cannot read SourceCode from the archive export to verify the import.");
+
+        var schema = await GetSourceCodeSchemaAsync(schemaUId, schemaName);
+        if (SameCode(schema["body"]?.ToString(), expected)) return false;
+
+        schema["body"] = expected;
+        using (var resp = await PostRawAsync("ServiceModel/SourceCodeSchemaDesignerService.svc/SaveSchema",
+                   new StringContent(schema.ToJsonString(), Encoding.UTF8, "application/json")))
+        {
+            var text = await resp.Content.ReadAsStringAsync();
+            EnsureBaseResponse(resp, text, $"SourceCodeSchemaDesignerService/SaveSchema({schemaName})");
+        }
+        var after = await GetSourceCodeSchemaAsync(schemaUId, schemaName);
+        if (!SameCode(after["body"]?.ToString(), expected))
+            throw new CreatioException($"{schemaName}: the stand keeps the old source code after import and after a designer save.");
+        return true;
+    }
+
+    private async Task<JsonObject> GetSourceCodeSchemaAsync(Guid schemaUId, string schemaName)
+    {
+        using var resp = await PostRawAsync("ServiceModel/SourceCodeSchemaDesignerService.svc/GetSchema",
+            new StringContent(new JsonObject { ["schemaUId"] = schemaUId.ToString() }.ToJsonString(), Encoding.UTF8, "application/json"));
+        var text = await resp.Content.ReadAsStringAsync();
+        EnsureBaseResponse(resp, text, $"SourceCodeSchemaDesignerService/GetSchema({schemaName})");
+        return JsonNode.Parse(text)?["schema"] as JsonObject
+               ?? throw new CreatioException($"SourceCodeSchemaDesignerService/GetSchema({schemaName}): no schema in the answer.");
+    }
+
+    /// <summary>Compares code ignoring line endings, indentation and blank lines.</summary>
+    private static bool SameCode(string? a, string? b)
+    {
+        static IEnumerable<string> Lines(string? s) => (s ?? "").Replace("\r", "").Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0);
+        return Lines(a).SequenceEqual(Lines(b));
     }
 
     /// <summary>
