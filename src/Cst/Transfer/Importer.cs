@@ -307,7 +307,47 @@ public sealed class Importer(CreatioClient client)
                 await installer.ExecuteSqlAsync(sqlScripts, ElementInstaller.SqlAfterPackage);
             }
 
-            if (data.Count > 0)
+            if (data.Count > 0 && installer.UseSqlBindings)
+            {
+                // As the package installer: store every binding, then one InstallData call for all of them.
+                Log.Info($"Checking {data.Count} data binding(s)...");
+                var codes = ElementInstaller.ArchiveSettingCodes(data.Select(d => (d, sources[d.SourcePackage])));
+                var prepared = new List<ElementInstaller.SqlBinding>();
+                foreach (var d in data)
+                {
+                    var exists = onTarget.GetValueOrDefault(d.UId)?.Any(e => e.Kind == ItemKind.Data) == true;
+                    prepared.Add(await installer.PrepareBindingBySqlAsync(d, sources[d.SourcePackage], itemTarget[d.UId].UId, itemTarget[d.UId].Name, exists, codes));
+                }
+                if (installer.Conflicts.Count > 0)
+                    throw new CreatioException("data bindings not written: " + string.Join(" | ", installer.Conflicts));
+
+                Log.Info("Writing data bindings by SQL...");
+                var toInstall = new List<Guid>();
+                foreach (var b in prepared.Where(b => b.Install))
+                {
+                    await installer.WriteBindingBySqlAsync(b);
+                    ((JsonArray)restore["dataBackups"]!).Add(new JsonObject
+                    {
+                        ["name"] = b.Item.Name, ["isNew"] = !b.Exists,
+                        ["backup"] = JsonSerializer.SerializeToNode(b.Backup, Manifest.Json)
+                    });
+                    await SaveRestore();
+                    toInstall.Add(b.Item.UId);
+                }
+                if (toInstall.Count > 0)
+                {
+                    Log.Info($"Installing {toInstall.Count} data binding(s) with one InstallData call...");
+                    try { await client.InstallDataAsync(toInstall); }
+                    catch (CreatioException ex)
+                    {
+                        // The installer keeps the reason per binding in SysPackageSchemaData.LastError.
+                        var reasons = await installer.ReadBindingErrorsAsync(toInstall);
+                        throw new CreatioException(reasons.Count == 0 ? ex.Message
+                            : ex.Message + "; " + string.Join("; ", reasons.Select(r => $"{r.Key}: {r.Value}")));
+                    }
+                }
+            }
+            else if (data.Count > 0)
             {
                 Log.Info($"Installing {data.Count} data binding(s)...");
                 foreach (var d in data)

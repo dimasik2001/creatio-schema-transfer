@@ -23,6 +23,8 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
     private const int DataInstall = 0, DataFirstInstall = 1, DataUpdate = 2, DataInstallIfNotExists = 3;
 
     public List<string> Warnings { get; } = [];
+    /// <summary>Problems found while preparing SQL bindings that must stop the import before anything is written.</summary>
+    public List<string> Conflicts { get; } = [];
 
     // ---------- SQL ----------
 
@@ -97,9 +99,6 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         var folder = $"Data/{item.Name}/";
         var d = source.ElementDescriptor(ItemKind.Data, item.Name) ?? throw new InvalidDataException($"{item.Name}: data descriptor missing.");
         var entity = d["Schema"]?["Name"]?.ToString() ?? throw new InvalidDataException($"{item.Name}: no Schema.Name in descriptor.");
-        // System settings keep their own path (settings services, archive Ids, "All employees" values only).
-        if (UseSqlBindings && entity != "SysSettings" && entity != "SysSettingsValue")
-            return await InstallDataBySqlAsync(item, source, d, entity, targetPackageUId, targetPackageName, bindingExistsOnTarget);
         var entityUId = Guid.Parse(d["Schema"]!["UId"]!.ToString());
         var installType = d["InstallType"]?.GetValue<int>() ?? DataInstall;
         var columns = (d["Columns"] as JsonArray ?? []).OfType<JsonObject>().Select(c =>
@@ -408,10 +407,41 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
 
     // ---------- Data through SQL (BindingSql) ----------
 
-    private async Task<DataBackup> InstallDataBySqlAsync(ManifestItem item, PackageContent source, JsonObject d, string entity,
-        Guid targetPackageUId, string targetPackageName, bool bindingExistsOnTarget)
+    /// <summary>Result of <see cref="PrepareBindingBySqlAsync"/>: backup for restore and whether it is written and installed.</summary>
+    public sealed record SqlBinding(ManifestItem Item, PackageContent Source, string TargetPackageName, DataBackup Backup, bool Install, bool Exists);
+
+    /// <summary>
+    /// Code of every setting in the archive's SysSettings bindings, by its archive Id. The data installer remaps
+    /// SysSettingsValue.SysSettings to the target setting with the same code, so cst checks values the same way.
+    /// </summary>
+    public static Dictionary<Guid, string> ArchiveSettingCodes(IEnumerable<(ManifestItem Item, PackageContent Source)> bindings)
+    {
+        var result = new Dictionary<Guid, string>();
+        foreach (var (item, source) in bindings)
+        {
+            var d = source.ElementDescriptor(ItemKind.Data, item.Name);
+            if (d?["Schema"]?["Name"]?.ToString() != "SysSettings") continue;
+            var columns = ReadColumns(d);
+            foreach (var row in ReadRows(source.Get($"Data/{item.Name}/data.json"), columns.ToDictionary(c => c.UId)))
+                if (row.GetValueOrDefault("Id") is Guid id && row.GetValueOrDefault("Code") is { } code)
+                    result[id] = code.ToString()!;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// SQL path, step 1 of 2: records what restore needs (previous row values, previous binding files) and stores the
+    /// binding with a temporary SQL script. Step 2 is one InstallData call for all bindings (Importer), which is how
+    /// the package installer works: rows of all bindings first, then a separate pass for the lookup columns of all of
+    /// them (so the order between bindings does not matter), SysSettingsValue after the rest, SysSettings matched by
+    /// Code and SysSettingsValue.SysSettings remapped by code, settings cache cleared at the end.
+    /// </summary>
+    public async Task<SqlBinding> PrepareBindingBySqlAsync(ManifestItem item, PackageContent source, Guid targetPackageUId,
+        string targetPackageName, bool bindingExistsOnTarget, IReadOnlyDictionary<Guid, string> archiveSettingCodes)
     {
         var folder = $"Data/{item.Name}/";
+        var d = source.ElementDescriptor(ItemKind.Data, item.Name) ?? throw new InvalidDataException($"{item.Name}: data descriptor missing.");
+        var entity = d["Schema"]?["Name"]?.ToString() ?? throw new InvalidDataException($"{item.Name}: no Schema.Name in descriptor.");
         var installType = d["InstallType"]?.GetValue<int>() ?? DataInstall;
         var backup = new DataBackup
         {
@@ -420,21 +450,43 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         if (installType == DataFirstInstall && bindingExistsOnTarget)
         {
             Log.Info($"  {item.Name}: install type FirstInstall and the binding already exists, skipped");
-            return backup;
+            return new SqlBinding(item, source, targetPackageName, backup, false, true);
         }
 
-        // Previous values of the rows InstallData is going to change, for restore. Binary columns are not read back.
-        var columns = (d["Columns"] as JsonArray ?? []).OfType<JsonObject>().Select(c =>
+        var columns = ReadColumns(d);
+        var rows = ReadRows(source.Get(folder + "data.json"), columns.ToDictionary(c => c.UId));
+        if (entity == "SysSettings") await BackupSettingsAsync(item, rows, installType, backup);
+        else if (entity == "SysSettingsValue") await BackupSettingValuesAsync(item, rows, installType, archiveSettingCodes, backup);
+        else await BackupRowsAsync(item, entity, rows, columns, installType, backup);
+        return new SqlBinding(item, source, targetPackageName, backup, true, bindingExistsOnTarget);
+    }
+
+    /// <summary>SQL path, step 2: backs up the binding files on the target and stores the binding with a temporary script.</summary>
+    public async Task WriteBindingBySqlAsync(SqlBinding b)
+    {
+        if (b.Exists) b.Backup.BindingBackupDir = await SaveBindingBackupAsync(b.TargetPackageName, b.Item.Name);
+        await WriteBindingAsync(b.Source, $"Data/{b.Item.Name}/", b.Item.UId, b.Item.Name, b.Backup.PackageUId);
+        Log.Info($"  {b.Item.Name}: binding written by SQL ({(b.Exists ? "updated" : "new")}); "
+                 + $"{b.Backup.Inserted.Count} new, {b.Backup.Updated.Count} existing row(s)");
+    }
+
+    private static List<DataColumn> ReadColumns(JsonObject d) =>
+        (d["Columns"] as JsonArray ?? []).OfType<JsonObject>().Select(c =>
         {
             var typeUId = Guid.Parse(c["DataTypeValueUId"]!.ToString());
             return new DataColumn(Guid.Parse(c["ColumnUId"]!.ToString()), c["ColumnName"]!.ToString(),
                 c["IsKey"]?.GetValue<bool>() ?? false, c["IsForceUpdate"]?.GetValue<bool>() ?? false, typeUId, DsType(typeUId));
         }).ToList();
+
+    /// <summary>Previous values of the rows InstallData is going to change. Binary columns are not read back.</summary>
+    private async Task BackupRowsAsync(ManifestItem item, string entity, List<Dictionary<string, object?>> rows, List<DataColumn> columns,
+        int installType, DataBackup backup)
+    {
         var idColumn = columns.FirstOrDefault(c => c.Name == "Id");
         var keys = columns.Where(c => c.IsKey && c.DsType != null).ToList();
         if (keys.Count == 0 && idColumn != null) keys.Add(idColumn);
         if (keys.Count == 0) throw new TransferException([$"{item.Name}: neither key columns nor Id in the binding."]);
-        foreach (var row in ReadRows(source.Get(folder + "data.json"), columns.ToDictionary(c => c.UId)))
+        foreach (var row in rows)
         {
             var existing = await FindRowAsync(entity, keys, row, columns);
             if (existing == null)
@@ -447,15 +499,129 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
             previous["Id"] = existingId.ToString();
             backup.Updated.Add(previous);
         }
+    }
 
-        if (bindingExistsOnTarget)
-            backup.BindingBackupDir = await SaveBindingBackupAsync(targetPackageName, item.Name);
+    /// <summary>SysSettings rows as the installer matches them: by Code. Previous state kept as a settings-service body.</summary>
+    private async Task BackupSettingsAsync(ManifestItem item, List<Dictionary<string, object?>> rows, int installType, DataBackup backup)
+    {
+        foreach (var row in rows)
+        {
+            var code = row.GetValueOrDefault("Code")?.ToString();
+            if (string.IsNullOrEmpty(code)) { Warnings.Add($"{item.Name}: a SysSettings row without Code."); continue; }
+            var current = await SelectSettingByCodeAsync(code);
+            if (current == null)
+            {
+                if (row.GetValueOrDefault("Id") is Guid id) backup.Inserted.Add(id);
+                continue;
+            }
+            if (row.GetValueOrDefault("Id") is Guid archiveId && current["Id"]?.ToString() is { } targetId
+                && !string.Equals(archiveId.ToString(), targetId, StringComparison.OrdinalIgnoreCase))
+                Log.Info($"  {item.Name}: setting {code} exists on the target with Id {targetId} (archive {archiveId}); it keeps the target Id");
+            if (installType == DataInstallIfNotExists) continue;
+            backup.Updated.Add(new JsonObject
+            {
+                ["setting"] = SettingBody(Guid.Parse(current["Id"]!.ToString()), new Dictionary<string, object?>(), current, _ => false)
+            });
+        }
+    }
 
-        await WriteBindingAsync(source, folder, item.UId, item.Name, targetPackageUId);
-        await client.InstallDataAsync([item.UId]);
-        Log.Info($"  {item.Name}: binding written by SQL ({(bindingExistsOnTarget ? "updated" : "new")}); "
-                 + $"{backup.Inserted.Count} new, {backup.Updated.Count} existing row(s); installed by InstallData");
-        return backup;
+    /// <summary>
+    /// SysSettingsValue rows as the installer matches them: by row Id, with SysSettings remapped by code. Warns where
+    /// the result would surprise: a value row for the same setting and user/role under another Id (a second row is
+    /// created — SysSettingsValue has no unique index), or a user/role missing on the target.
+    /// </summary>
+    private async Task BackupSettingValuesAsync(ManifestItem item, List<Dictionary<string, object?>> rows, int installType,
+        IReadOnlyDictionary<Guid, string> archiveSettingCodes, DataBackup backup)
+    {
+        foreach (var row in rows)
+        {
+            if (row.GetValueOrDefault("Id") is not Guid valueId) { Warnings.Add($"{item.Name}: a SysSettingsValue row without Id."); continue; }
+            var archiveSetting = row.GetValueOrDefault("SysSettings") as Guid?;
+            var unit = row.GetValueOrDefault("SysAdminUnit") as Guid? ?? AllEmployees;
+            JsonObject? setting = null;
+            if (archiveSetting is { } s)
+                setting = archiveSettingCodes.TryGetValue(s, out var code) ? await SelectSettingByCodeAsync(code) : await SelectSettingAsync(s);
+            if (setting == null)
+            {
+                Warnings.Add($"{item.Name}: value {valueId}: its system setting {archiveSetting} is neither on the target nor in this archive's SysSettings bindings; InstallData will fail on it.");
+                continue;
+            }
+            var settingCode = setting["Code"]!.ToString();
+            var settingId = Guid.Parse(setting["Id"]!.ToString());
+            if (unit != AllEmployees && !await ExistsAsync("SysAdminUnit", unit))
+                Warnings.Add($"{item.Name}: value of {settingCode} for SysAdminUnit {unit}, which does not exist on the target; InstallData will fail on it.");
+
+            var sameUnit = await SelectValueIdsAsync(settingId, unit);
+            if (sameUnit.Contains(valueId))
+            {
+                if (installType == DataInstallIfNotExists) continue;
+                if (unit == AllEmployees)
+                {
+                    var (column, _) = SettingValue(setting["ValueTypeName"]?.ToString() ?? "", row);
+                    if (column != null)
+                        backup.Updated.Add(new JsonObject { ["code"] = settingCode, ["value"] = await SelectDefaultValueAsync(valueId, column) });
+                }
+                else Warnings.Add($"{item.Name}: previous value of {settingCode} for SysAdminUnit {unit} is not backed up (restore covers the All employees value only).");
+                continue;
+            }
+            backup.Inserted.Add(valueId);
+            if (sameUnit.Count > 0)
+                Conflicts.Add($"{item.Name}: {settingCode} already has a value for SysAdminUnit {unit} on the target (row {sameUnit[0]}); "
+                              + $"the archive row {valueId} has another Id, so InstallData would add a second value row (a package install does the same). "
+                              + "Leave the binding out or make the Ids match.");
+        }
+    }
+
+    /// <summary>Binding name → SysPackageSchemaData.LastError for the bindings that have one.</summary>
+    public async Task<Dictionary<string, string>> ReadBindingErrorsAsync(IEnumerable<Guid> bindingUIds)
+    {
+        var q = Select("SysPackageSchemaData", "Name", "LastError");
+        q["Filters"] = new JsonObject
+        {
+            ["FilterType"] = 6, ["LogicalOperation"] = 0,
+            ["Items"] = new JsonObject
+            {
+                ["u"] = new JsonObject
+                {
+                    ["FilterType"] = 4, ["ComparisonType"] = 3,
+                    ["LeftExpression"] = new JsonObject { ["ExpressionType"] = 0, ["ColumnPath"] = "UId" },
+                    ["RightExpressions"] = new JsonArray(bindingUIds.Select(u => (JsonNode)Param(0, u)).ToArray())
+                }
+            }
+        };
+        try
+        {
+            return (await client.SelectAsync(q))
+                .Where(r => !string.IsNullOrWhiteSpace(r["LastError"]?.ToString()))
+                .GroupBy(r => r["Name"]!.ToString())
+                .ToDictionary(g => g.Key, g => g.First()["LastError"]!.ToString());
+        }
+        catch (CreatioException) { return []; }
+    }
+
+    private async Task<JsonObject?> SelectSettingByCodeAsync(string code)
+    {
+        var q = Select("SysSettings", ["Id", .. SettingProps]);
+        q["Filters"] = new JsonObject { ["FilterType"] = 6, ["LogicalOperation"] = 0, ["Items"] = new JsonObject { ["c"] = Compare("Code", 1, code) } };
+        return (await client.SelectAsync(q)).FirstOrDefault();
+    }
+
+    private async Task<List<Guid>> SelectValueIdsAsync(Guid settingId, Guid unit)
+    {
+        var q = Select("SysSettingsValue", "Id");
+        q["Filters"] = new JsonObject
+        {
+            ["FilterType"] = 6, ["LogicalOperation"] = 0,
+            ["Items"] = new JsonObject { ["s"] = Compare("SysSettings", 0, settingId), ["u"] = Compare("SysAdminUnit", 0, unit) }
+        };
+        return (await client.SelectAsync(q)).Select(r => Guid.Parse(r["Id"]!.ToString())).ToList();
+    }
+
+    private async Task<bool> ExistsAsync(string entity, Guid id)
+    {
+        var q = Select(entity, "Id");
+        q["Filters"] = new JsonObject { ["FilterType"] = 6, ["LogicalOperation"] = 0, ["Items"] = new JsonObject { ["id"] = Compare("Id", 0, id) } };
+        return (await client.SelectAsync(q)).Count > 0;
     }
 
     /// <summary>Stores the binding (rows snapshot, columns, translations) with a temporary SQL script.</summary>
