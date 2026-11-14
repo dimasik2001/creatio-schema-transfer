@@ -75,13 +75,31 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         public string Entity { get; set; } = "";
         public List<Guid> Inserted { get; set; } = [];
         public List<JsonObject> Updated { get; set; } = [];
+        /// <summary>True when the binding was written by SQL (BindingSql), so restore can put its old content back.</summary>
+        public bool BySql { get; set; }
+        public Guid BindingUId { get; set; }
+        public string BindingName { get; set; } = "";
+        public Guid PackageUId { get; set; }
+        /// <summary>Folder (relative to the work dir) with the binding's files as they were on the target before.</summary>
+        public string? BindingBackupDir { get; set; }
     }
 
-    public async Task<DataBackup> InstallDataAsync(ManifestItem item, PackageContent source, Guid targetPackageUId, bool bindingExistsOnTarget)
+    /// <summary>
+    /// Write data bindings with a temporary SQL script straight into SysPackageSchemaData (as a package install
+    /// stores them) instead of the data designer. Only for a PostgreSQL target for now.
+    /// </summary>
+    public bool UseSqlBindings { get; init; }
+    /// <summary>Import work dir: binding backups go to backup/data/&lt;Name&gt;/.</summary>
+    public string? WorkDir { get; init; }
+
+    public async Task<DataBackup> InstallDataAsync(ManifestItem item, PackageContent source, Guid targetPackageUId, string targetPackageName, bool bindingExistsOnTarget)
     {
         var folder = $"Data/{item.Name}/";
         var d = source.ElementDescriptor(ItemKind.Data, item.Name) ?? throw new InvalidDataException($"{item.Name}: data descriptor missing.");
         var entity = d["Schema"]?["Name"]?.ToString() ?? throw new InvalidDataException($"{item.Name}: no Schema.Name in descriptor.");
+        // System settings keep their own path (settings services, archive Ids, "All employees" values only).
+        if (UseSqlBindings && entity != "SysSettings" && entity != "SysSettingsValue")
+            return await InstallDataBySqlAsync(item, source, d, entity, targetPackageUId, targetPackageName, bindingExistsOnTarget);
         var entityUId = Guid.Parse(d["Schema"]!["UId"]!.ToString());
         var installType = d["InstallType"]?.GetValue<int>() ?? DataInstall;
         var columns = (d["Columns"] as JsonArray ?? []).OfType<JsonObject>().Select(c =>
@@ -388,6 +406,133 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         return result;
     }
 
+    // ---------- Data through SQL (BindingSql) ----------
+
+    private async Task<DataBackup> InstallDataBySqlAsync(ManifestItem item, PackageContent source, JsonObject d, string entity,
+        Guid targetPackageUId, string targetPackageName, bool bindingExistsOnTarget)
+    {
+        var folder = $"Data/{item.Name}/";
+        var installType = d["InstallType"]?.GetValue<int>() ?? DataInstall;
+        var backup = new DataBackup
+        {
+            Entity = entity, BySql = true, BindingUId = item.UId, BindingName = item.Name, PackageUId = targetPackageUId
+        };
+        if (installType == DataFirstInstall && bindingExistsOnTarget)
+        {
+            Log.Info($"  {item.Name}: install type FirstInstall and the binding already exists, skipped");
+            return backup;
+        }
+
+        // Previous values of the rows InstallData is going to change, for restore. Binary columns are not read back.
+        var columns = (d["Columns"] as JsonArray ?? []).OfType<JsonObject>().Select(c =>
+        {
+            var typeUId = Guid.Parse(c["DataTypeValueUId"]!.ToString());
+            return new DataColumn(Guid.Parse(c["ColumnUId"]!.ToString()), c["ColumnName"]!.ToString(),
+                c["IsKey"]?.GetValue<bool>() ?? false, c["IsForceUpdate"]?.GetValue<bool>() ?? false, typeUId, DsType(typeUId));
+        }).ToList();
+        var idColumn = columns.FirstOrDefault(c => c.Name == "Id");
+        var keys = columns.Where(c => c.IsKey && c.DsType != null).ToList();
+        if (keys.Count == 0 && idColumn != null) keys.Add(idColumn);
+        if (keys.Count == 0) throw new TransferException([$"{item.Name}: neither key columns nor Id in the binding."]);
+        foreach (var row in ReadRows(source.Get(folder + "data.json"), columns.ToDictionary(c => c.UId)))
+        {
+            var existing = await FindRowAsync(entity, keys, row, columns);
+            if (existing == null)
+            {
+                if (row.TryGetValue("Id", out var v) && v is Guid id) backup.Inserted.Add(id);
+                continue;
+            }
+            if (installType == DataInstallIfNotExists) continue;
+            var (existingId, previous) = existing.Value;
+            previous["Id"] = existingId.ToString();
+            backup.Updated.Add(previous);
+        }
+
+        if (bindingExistsOnTarget)
+            backup.BindingBackupDir = await SaveBindingBackupAsync(targetPackageName, item.Name);
+
+        await WriteBindingAsync(source, folder, item.UId, item.Name, targetPackageUId);
+        await client.InstallDataAsync([item.UId]);
+        Log.Info($"  {item.Name}: binding written by SQL ({(bindingExistsOnTarget ? "updated" : "new")}); "
+                 + $"{backup.Inserted.Count} new, {backup.Updated.Count} existing row(s); installed by InstallData");
+        return backup;
+    }
+
+    /// <summary>Stores the binding (rows snapshot, columns, translations) with a temporary SQL script.</summary>
+    private async Task WriteBindingAsync(PackageContent source, string folder, Guid bindingUId, string bindingName, Guid packageUId)
+    {
+        if (dbEngineType != 2) throw new CreatioException($"{bindingName}: SQL bindings are implemented for PostgreSQL only.");
+        await LoadCulturesAsync();
+        var r = BindingSql.PostgreSql(source, folder, bindingUId, bindingName, packageUId, client.Login, _cultures!.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        foreach (var c in r.SkippedCultures)
+            Warnings.Add($"{bindingName}: culture {c} does not exist on the target, its translations are skipped.");
+        await RunTemporarySqlAsync(packageUId, r.Sql, bindingName);
+    }
+
+    /// <summary>
+    /// Saves <paramref name="sql"/> as a temporary SQL script element in the package, executes it and deletes it.
+    /// The SQL designer already executes a script for the current engine when saving it (validation), so errors in the
+    /// script come back from the save.
+    /// </summary>
+    private async Task RunTemporarySqlAsync(Guid packageUId, string sql, string label)
+    {
+        var uId = Guid.NewGuid();
+        var name = "CstTmp_" + uId.ToString("N")[..12];
+        try
+        {
+            await client.SaveSqlScriptAsync(uId, name, packageUId, sql, SqlAfterPackage, dbEngineType, [], false);
+            await client.InstallSqlScriptsAsync([uId]);
+        }
+        finally
+        {
+            try { await client.DeleteWorkspaceItemAsync(uId, CreatioClient.WorkspaceSqlScript, name); }
+            catch (Exception ex) { Warnings.Add($"{label}: temporary SQL script {name} ({uId}) was not deleted: {ex.Message}"); }
+        }
+    }
+
+    private readonly Dictionary<string, PackageContent> _targetPackages = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Copies the binding's files from the target package (as exported now) to backup/data/&lt;Name&gt;/.</summary>
+    private async Task<string?> SaveBindingBackupAsync(string packageName, string bindingName)
+    {
+        if (WorkDir == null) return null;
+        if (!_targetPackages.TryGetValue(packageName, out var content))
+        {
+            var zip = PackageGz.ReadZip(await client.GetZipPackagesAsync([packageName]));
+            _targetPackages[packageName] = content = zip.GetValueOrDefault(packageName) ?? zip.Values.FirstOrDefault() ?? new PackageContent();
+        }
+        var prefix = $"Data/{bindingName}/";
+        var files = content.Files.Where(f => f.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (files.Count == 0)
+        {
+            Warnings.Add($"{bindingName}: not found in the exported target package {packageName}; its previous content is not backed up.");
+            return null;
+        }
+        var rel = Path.Combine("backup", "data", bindingName);
+        foreach (var (path, bytes) in files)
+        {
+            var target = Path.Combine(WorkDir, rel, path[prefix.Length..].Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllBytesAsync(target, bytes);
+        }
+        return rel;
+    }
+
+    /// <summary>Writes the binding back from its backup folder (no InstallData: rows are restored separately).</summary>
+    private async Task RestoreBindingAsync(DataBackup backup, string workDir)
+    {
+        var dir = Path.Combine(workDir, backup.BindingBackupDir!);
+        var content = new PackageContent();
+        var folder = $"Data/{backup.BindingName}/";
+        foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+            content.Set(folder + Path.GetRelativePath(dir, f).Replace(Path.DirectorySeparatorChar, '/'), await File.ReadAllBytesAsync(f));
+        await WriteBindingAsync(content, folder, backup.BindingUId, backup.BindingName, backup.PackageUId);
+    }
+
+    private async Task LoadCulturesAsync() =>
+        _cultures ??= (await client.SelectAsync(Select("SysCulture", "Id", "Name")))
+            .ToDictionary(r => r["Name"]!.ToString(), r => Guid.Parse(r["Id"]!.ToString()), StringComparer.OrdinalIgnoreCase);
+
     private Dictionary<string, Guid>? _cultures;
 
     private async Task<int> SaveLocalizationsAsync(ManifestItem item, Guid targetPackageUId, List<string> files, PackageContent source)
@@ -480,9 +625,17 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
 
     private static JsonObject Value(int type, object value) => new() { ["ExpressionType"] = 2, ["Parameter"] = ParamObject(type, value) };
 
-    /// <summary>Puts back previous values and reports inserted rows (they are not deleted).</summary>
-    public async Task RestoreDataAsync(DataBackup backup)
+    /// <summary>
+    /// Puts back previous values and reports inserted rows (they are not deleted). A binding written by SQL also
+    /// gets its previous content back from <paramref name="workDir"/>.
+    /// </summary>
+    public async Task RestoreDataAsync(DataBackup backup, string workDir)
     {
+        if (backup.BySql && backup.BindingBackupDir != null)
+        {
+            Log.Info($"  {backup.BindingName}: restoring the previous binding content");
+            await RestoreBindingAsync(backup, workDir);
+        }
         if (backup.Entity == "SysSettings")
         {
             foreach (var prev in backup.Updated)

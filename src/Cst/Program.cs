@@ -16,7 +16,7 @@ static class Cli
 
         Usage:
           cst export  --env <src> (--config <list.txt> | --schemas "Pkg->Target:A,B;Pkg2:C") --out <transfer.zip>
-          cst import  --env <dst> --archive <transfer.zip> [--dry-run] [--no-compile] [--rebuild]
+          cst import  --env <dst> --archive <transfer.zip> [--dry-run] [--no-compile] [--rebuild] [--data-designer]
                       [--work-dir <dir>]
           cst inspect --archive <transfer.zip>
           cst restore --env <dst> --backup <work-dir> [--no-compile]
@@ -109,7 +109,7 @@ static class Cli
         var options = new ImportOptions
         {
             DryRun = a.Flag("dry-run"), NoCompile = a.Flag("no-compile"), FullRebuild = a.Flag("rebuild"),
-            WorkDir = workDir
+            DataDesigner = a.Flag("data-designer"), WorkDir = workDir
         };
         var r = await new Importer(client).ImportAsync(archive, options);
 
@@ -178,8 +178,8 @@ static class Cli
         {
             var backup = b["backup"].Deserialize<ElementInstaller.DataBackup>(Manifest.Json)!;
             Log.Info($"[data] restoring previous values of {b["name"]}...");
-            await installer.RestoreDataAsync(backup);
-            restored.Add($"data {b["name"]} ({backup.Updated.Count} row(s))");
+            await installer.RestoreDataAsync(backup, dir);
+            restored.Add($"data {b["name"]} ({backup.Updated.Count} row(s){(backup.BindingBackupDir != null ? ", binding content" : "")})");
             if (backup.Inserted.Count > 0) leftovers.Add($"{backup.Inserted.Count} row(s) inserted into {backup.Entity} by {b["name"]}: {string.Join(", ", backup.Inserted)}");
             if (b["isNew"]?.GetValue<bool>() == true) leftovers.Add($"data binding {b["name"]}");
         }
@@ -270,7 +270,7 @@ static class Cli
 sealed class Args
 {
     private readonly Dictionary<string, string?> _values = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> Flags = new(StringComparer.OrdinalIgnoreCase) { "json", "verbose", "dry-run", "no-compile", "rebuild" };
+    private static readonly HashSet<string> Flags = new(StringComparer.OrdinalIgnoreCase) { "json", "verbose", "dry-run", "no-compile", "rebuild", "data-designer" };
 
     public static Args Parse(IEnumerable<string> argv)
     {

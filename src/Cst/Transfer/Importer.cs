@@ -11,6 +11,8 @@ public sealed class ImportOptions
     public bool DryRun { get; init; }
     public bool NoCompile { get; init; }
     public bool FullRebuild { get; init; }
+    /// <summary>Use the data designer for bindings even where the SQL path is available (PostgreSQL).</summary>
+    public bool DataDesigner { get; init; }
     /// <summary>Folder for backups and restore.json.</summary>
     public required string WorkDir { get; init; }
 }
@@ -151,7 +153,11 @@ public sealed class Importer(CreatioClient client)
             return result;
         }
 
-        var installer = new ElementInstaller(client, dbEngine);
+        // Bindings: SQL path (exact copy of the source binding, binary columns included) on PostgreSQL; MSSql later.
+        var installer = new ElementInstaller(client, dbEngine)
+        {
+            UseSqlBindings = dbEngine == 2 && !options.DataDesigner, WorkDir = options.WorkDir
+        };
         var ordered = manifest.Items.Where(i => itemTarget.ContainsKey(i.UId)).OrderBy(i => i.Order).ThenBy(i => i.Name).ToList();
         var sqlScripts = ordered.Where(i => i.Kind == ItemKind.SqlScript)
             .Select(i => ElementInstaller.ReadSqlScript(i, sources[i.SourcePackage], itemTarget[i.UId].UId)).ToList();
@@ -307,7 +313,7 @@ public sealed class Importer(CreatioClient client)
                 foreach (var d in data)
                 {
                     var exists = onTarget.GetValueOrDefault(d.UId)?.Any(e => e.Kind == ItemKind.Data) == true;
-                    var backup = await installer.InstallDataAsync(d, sources[d.SourcePackage], itemTarget[d.UId].UId, exists);
+                    var backup = await installer.InstallDataAsync(d, sources[d.SourcePackage], itemTarget[d.UId].UId, itemTarget[d.UId].Name, exists);
                     ((JsonArray)restore["dataBackups"]!).Add(new JsonObject
                     {
                         ["name"] = d.Name, ["isNew"] = !exists,

@@ -33,6 +33,23 @@ public sealed class CreatioClient : IDisposable
 
     public string Url => _base.ToString().TrimEnd('/');
 
+    /// <summary>The user cst works as (for CreatedBy/ModifiedBy of rows written by SQL).</summary>
+    public string Login => _env.Login;
+
+    /// <summary>Workspace item types of WorkspaceExplorerService/Delete (Terrasoft.Core.ServiceModelContract.WorkspaceItemType).</summary>
+    public const int WorkspaceSqlScript = 0, WorkspaceSchemaData = 1;
+
+    /// <summary>Deletes a package element like the Configuration section does (WorkspaceExplorerService/Delete).</summary>
+    public async Task<int> DeleteWorkspaceItemAsync(Guid uId, int type, string name)
+    {
+        var body = new JsonArray(new JsonObject { ["uId"] = uId.ToString(), ["type"] = type, ["name"] = name });
+        using var resp = await PostRawAsync("ServiceModel/WorkspaceExplorerService.svc/Delete",
+            new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
+        var text = await resp.Content.ReadAsStringAsync();
+        EnsureBaseResponse(resp, text, $"WorkspaceExplorerService/Delete({name})");
+        return JsonNode.Parse(text)?["rowsAffected"]?.GetValue<int>() ?? 0;
+    }
+
     public async Task LoginAsync()
     {
         var body = new JsonObject { ["UserName"] = _env.Login, ["UserPassword"] = _env.Password };
