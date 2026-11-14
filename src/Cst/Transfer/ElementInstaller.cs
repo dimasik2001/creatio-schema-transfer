@@ -88,7 +88,7 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
 
     /// <summary>
     /// Write data bindings with a temporary SQL script straight into SysPackageSchemaData (as a package install
-    /// stores them) instead of the data designer. Only for a PostgreSQL target for now.
+    /// stores them) instead of the data designer. PostgreSQL and MSSql targets (BindingSql).
     /// </summary>
     public bool UseSqlBindings { get; init; }
     /// <summary>Import work dir: binding backups go to backup/data/&lt;Name&gt;/.</summary>
@@ -539,10 +539,19 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
             var archiveSetting = row.GetValueOrDefault("SysSettings") as Guid?;
             var unit = row.GetValueOrDefault("SysAdminUnit") as Guid? ?? AllEmployees;
             JsonObject? setting = null;
+            string? archiveCode = null;
             if (archiveSetting is { } s)
-                setting = archiveSettingCodes.TryGetValue(s, out var code) ? await SelectSettingByCodeAsync(code) : await SelectSettingAsync(s);
+                setting = archiveSettingCodes.TryGetValue(s, out archiveCode) ? await SelectSettingByCodeAsync(archiveCode) : await SelectSettingAsync(s);
             if (setting == null)
             {
+                if (archiveCode != null)
+                {
+                    // The setting is new: InstallData creates it from this archive, so its values cannot clash.
+                    if (unit != AllEmployees && !await ExistsAsync("SysAdminUnit", unit))
+                        Warnings.Add($"{item.Name}: value of {archiveCode} for SysAdminUnit {unit}, which does not exist on the target; InstallData will fail on it.");
+                    backup.Inserted.Add(valueId);
+                    continue;
+                }
                 Warnings.Add($"{item.Name}: value {valueId}: its system setting {archiveSetting} is neither on the target nor in this archive's SysSettings bindings; InstallData will fail on it.");
                 continue;
             }
@@ -627,9 +636,9 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
     /// <summary>Stores the binding (rows snapshot, columns, translations) with a temporary SQL script.</summary>
     private async Task WriteBindingAsync(PackageContent source, string folder, Guid bindingUId, string bindingName, Guid packageUId)
     {
-        if (dbEngineType != 2) throw new CreatioException($"{bindingName}: SQL bindings are implemented for PostgreSQL only.");
+        if (!BindingSql.Supports(dbEngineType)) throw new CreatioException($"{bindingName}: SQL bindings are not implemented for DB engine {dbEngineType}.");
         await LoadCulturesAsync();
-        var r = BindingSql.PostgreSql(source, folder, bindingUId, bindingName, packageUId, client.Login, _cultures!.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        var r = BindingSql.Build(dbEngineType, source, folder, bindingUId, bindingName, packageUId, client.Login, _cultures!.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase));
         foreach (var c in r.SkippedCultures)
             Warnings.Add($"{bindingName}: culture {c} does not exist on the target, its translations are skipped.");
         await RunTemporarySqlAsync(packageUId, r.Sql, bindingName);

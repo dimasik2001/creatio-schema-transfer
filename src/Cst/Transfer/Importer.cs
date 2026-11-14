@@ -153,10 +153,10 @@ public sealed class Importer(CreatioClient client)
             return result;
         }
 
-        // Bindings: SQL path (exact copy of the source binding, binary columns included) on PostgreSQL; MSSql later.
+        // Bindings: SQL path (exact copy of the source binding, binary columns included) on PostgreSQL and MSSql.
         var installer = new ElementInstaller(client, dbEngine)
         {
-            UseSqlBindings = dbEngine == 2 && !options.DataDesigner, WorkDir = options.WorkDir
+            UseSqlBindings = BindingSql.Supports(dbEngine) && !options.DataDesigner, WorkDir = options.WorkDir
         };
         var ordered = manifest.Items.Where(i => itemTarget.ContainsKey(i.UId)).OrderBy(i => i.Order).ThenBy(i => i.Name).ToList();
         var sqlScripts = ordered.Where(i => i.Kind == ItemKind.SqlScript)
