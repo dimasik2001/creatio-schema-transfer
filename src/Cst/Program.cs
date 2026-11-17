@@ -30,6 +30,8 @@ static class Cli
           --url <http://host:port> --login <user> --password <pwd>   (or CST_PASSWORD / CST_PASSWORD_<ENV>)
           --db-engine MSSql|PostgreSql|Oracle   overrides "DbEngine" of the environment; required for import
             and restore (decides which SQL scripts run), not used by export
+          --root <folder>   overrides "Path" of the environment: the Creatio installation root folder as seen from
+            this machine (like clio's EnvironmentPath); needed only for the files: section
           --settings <path to appsettings.json>
 
         Common: --json (machine-readable result on stdout), --verbose
@@ -39,6 +41,12 @@ static class Cli
           package LVBase -> UsrBase:
            - SchemaName
            - SomeDataBinding [data]     (optional type: [schema] [sql] [data])
+          files:                         (needs "Path" of both environments)
+           - Terrasoft.WebApp\Terrasoft.Configuration\bin\Terrasoft.Configuration.dll
+           - Terrasoft.WebApp\SomeFolder              (a folder: all files below it)
+           - Terrasoft.WebApp\bin\Utk*.dll            (a mask in the file name)
+          Files are written last on import (after compilation); identical files are skipped, replaced ones
+          are backed up; restore puts them back and deletes files the import created.
         """;
 
     public static async Task<int> RunAsync(string[] argv)
@@ -78,7 +86,7 @@ static class Cli
     static async Task<CreatioClient> ConnectAsync(Args a)
     {
         var settings = AppSettings.Load(a.Value("settings"));
-        var env = settings.Resolve(a.Value("env"), a.Value("url"), a.Value("login"), a.Value("password"), a.Value("db-engine"));
+        var env = settings.Resolve(a.Value("env"), a.Value("url"), a.Value("login"), a.Value("password"), a.Value("db-engine"), a.Value("root"));
         var client = new CreatioClient(env);
         Log.Info($"Connecting to {client.Url} as {env.Login}...");
         await client.LoginAsync();
@@ -88,11 +96,12 @@ static class Cli
     static async Task<int> ExportAsync(Args a, bool json)
     {
         var list = new List<SchemaListPackage>();
-        if (a.Value("config") is { } cfg) list = SchemaList.ParseFile(cfg);
+        var files = new List<string>();
+        if (a.Value("config") is { } cfg) { list = SchemaList.ParseFile(cfg); files = SchemaList.ParseFilesSection(cfg); }
         if (a.Value("schemas") is { } inline) SchemaList.Merge(list, SchemaList.ParseInline(inline));
         var output = a.Required("out");
         using var client = await ConnectAsync(a);
-        var manifest = await new Exporter(client).ExportAsync(list, output);
+        var manifest = await new Exporter(client).ExportAsync(list, output, files);
 
         if (json) { PrintJson(new { ok = true, archive = Path.GetFullPath(output), manifest }); return 0; }
         PrintPlan(manifest);
@@ -206,10 +215,16 @@ static class Cli
             restored.Add($"SQL {b["name"]}");
         }
         var errors = new List<string>();
-        if (!a.Flag("no-compile"))
+        if (!a.Flag("no-compile") && (schemaBackups.Length > 0 || sqlBackups.Length > 0 || dataBackups.Length > 0))
         {
             Log.Info("Compiling configuration...");
             errors = await client.BuildAsync(false);
+        }
+        // Files last, as in import (a compilation would rewrite Terrasoft.Configuration\bin).
+        if (info["fileBackups"] is JsonArray fileBackups && fileBackups.Count > 0)
+        {
+            Log.Info($"Restoring {fileBackups.Count} file(s)...");
+            restored.AddRange(FileTransfer.Restore(fileBackups, dir));
         }
         foreach (var w in installer.Warnings) Log.Warn(w);
         if (json) PrintJson(new { ok = errors.Count == 0, restored, notRemoved = leftovers, compileErrors = errors });
@@ -243,6 +258,13 @@ static class Cli
         {
             Console.WriteLine($"Required on target (not in archive): {m.External.Count}");
             foreach (var e in m.External) Console.WriteLine($"  {e.SourcePackage}/{e.Name} ({e.Kind}) ← {string.Join(", ", e.RequiredBy)}");
+        }
+        if (m.Files.Count > 0)
+        {
+            Console.WriteLine($"Files (relative to the Creatio root folder, written last on import): {m.Files.Count}");
+            var shown = Log.Verbose ? m.Files : m.Files.Take(20).ToList();
+            foreach (var f in shown) Console.WriteLine($"  {f.Path}  ({f.Size:N0} bytes)");
+            if (shown.Count < m.Files.Count) Console.WriteLine($"  ... {m.Files.Count - shown.Count} more (--verbose lists all)");
         }
         foreach (var w in m.Warnings) Console.WriteLine("Warning: " + w);
     }

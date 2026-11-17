@@ -56,7 +56,10 @@ public sealed class Importer(CreatioClient client)
         var result = new ImportResult { WorkDir = options.WorkDir };
         // From the environment's settings (DbEngine / --db-engine); checked before anything else.
         var dbEngine = client.DbEngineType;
-        Log.Info($"Archive: {manifest.Items.Count} element(s) from {manifest.SourceUrl}, created {manifest.CreatedUtc:u}; target DB engine: {DbEngineName(dbEngine)}");
+        Log.Info($"Archive: {manifest.Items.Count} element(s), {manifest.Files.Count} file(s) from {manifest.SourceUrl}, created {manifest.CreatedUtc:u}; target DB engine: {DbEngineName(dbEngine)}");
+        // Files need the target's Creatio root folder; checked before anything else, like DbEngine.
+        var fileRoot = manifest.Files.Count == 0 ? null : client.RootPath ?? throw new ArgumentException(
+            $"The archive carries {manifest.Files.Count} file(s), but the target environment has no Creatio root folder: set \"Path\" for it in appsettings.json (like clio's EnvironmentPath) or pass --root.");
 
         var catalog = new Catalog(client);
         var packages = await catalog.LoadPackagesAsync();
@@ -153,6 +156,11 @@ public sealed class Importer(CreatioClient client)
             return result;
         }
 
+        // Files: compare with the target folder and make sure nothing to replace is locked, before any change.
+        var filePlan = fileRoot == null ? [] : FileTransfer.Plan(fileRoot, manifest.Files);
+        if (filePlan.Any(p => p.State != "identical" && FileTransfer.NeedsRestart(p.File.Path)))
+            result.Notes.Add("Files under a bin folder or *.config are picked up only after the Creatio application is restarted (IIS app pool recycle / clio restart-web-app). A later compilation rewrites Terrasoft.Configuration\\bin.");
+
         // Bindings: SQL path (exact copy of the source binding, binary columns included) on PostgreSQL and MSSql.
         var installer = new ElementInstaller(client, dbEngine)
         {
@@ -175,6 +183,8 @@ public sealed class Importer(CreatioClient client)
             foreach (var s in sqlScripts.Where(s => s.InstallType == ElementInstaller.SqlAfterPackage)) Log.Info($"  SQL AfterPackage: {s.Item.Name}");
             foreach (var d in data) Log.Info($"  data: {d.Name} → {itemTarget[d.UId].Name}");
             foreach (var s in sqlScripts.Where(s => s.InstallType == ElementInstaller.SqlAfterSchemaData)) Log.Info($"  SQL AfterSchemaData: {s.Item.Name}");
+            if (filePlan.Count > 0) Log.Info($"  files into {fileRoot} (written last):");
+            foreach (var line in FileTransfer.Describe(filePlan)) Log.Info(line);
             return result;
         }
 
@@ -185,7 +195,7 @@ public sealed class Importer(CreatioClient client)
         {
             ["targetUrl"] = client.Url, ["createdUtc"] = DateTime.UtcNow,
             ["schemaBackups"] = new JsonArray(), ["createdSchemas"] = new JsonArray(),
-            ["sqlBackups"] = new JsonArray(), ["dataBackups"] = new JsonArray()
+            ["sqlBackups"] = new JsonArray(), ["dataBackups"] = new JsonArray(), ["fileBackups"] = new JsonArray()
         };
         var restorePath = Path.Combine(options.WorkDir, "restore.json");
         async Task SaveRestore() => await File.WriteAllTextAsync(restorePath, restore.ToJsonString(Manifest.Json));
@@ -368,6 +378,23 @@ public sealed class Importer(CreatioClient client)
                 Log.Info("SQL AfterSchemaData:");
                 await installer.ExecuteSqlAsync(sqlScripts, ElementInstaller.SqlAfterSchemaData);
             }
+
+            // Files last: compilation above writes Terrasoft.Configuration\bin and would overwrite transferred files.
+            if (filePlan.Count > 0)
+            {
+                var changed = filePlan.Count(p => p.State != "identical");
+                Log.Info($"Files into {fileRoot}: {changed} to write, {filePlan.Count - changed} identical...");
+                foreach (var line in FileTransfer.Describe(filePlan.Where(p => p.State != "identical").ToList())) Log.Info(line);
+                var records = FileTransfer.Apply(filePlan, e => TransferArchive.ReadBytes(archivePath, e), backupDir, options.WorkDir);
+                foreach (var r in records) ((JsonArray)restore["fileBackups"]!).Add(r!.DeepClone());
+                await SaveRestore();
+                result.Installed.Add($"{changed} file(s)");
+            }
+        }
+        catch (IOException ex)
+        {
+            await SaveRestore();
+            throw new InstallException($"File transfer failed: {ex.Message}. Backups are in {options.WorkDir}. Restore: cst restore --backup \"{options.WorkDir}\" --env <target>");
         }
         catch (CreatioException ex)
         {

@@ -12,6 +12,11 @@ public sealed class EnvironmentSettings
     public int TimeoutMinutes { get; set; } = 30;
     /// <summary>DB engine of the environment: MSSql, PostgreSql or Oracle. Required for import (decides which SQL scripts run).</summary>
     public string? DbEngine { get; set; }
+    /// <summary>
+    /// Root folder of the Creatio installation as seen from this machine (like clio's EnvironmentPath), e.g.
+    /// D:\inetpub\creatio. Enables the files: section; not needed otherwise.
+    /// </summary>
+    public string? Path { get; set; }
 
     /// <summary>SysPackageSqlScript.DBEngineType value of <see cref="DbEngine"/>: 0 MSSQL, 1 Oracle, 2 PostgreSQL.</summary>
     public static int ParseDbEngine(string? name, string where) => name?.Trim().ToLowerInvariant() switch
@@ -43,7 +48,7 @@ public sealed class AppSettings
     /// Resolves an environment from --env plus overrides (--url, --login, --password).
     /// The password may also come from CST_PASSWORD or CST_PASSWORD_&lt;ENV&gt;.
     /// </summary>
-    public EnvironmentSettings Resolve(string? envName, string? url, string? login, string? password, string? dbEngine = null)
+    public EnvironmentSettings Resolve(string? envName, string? url, string? login, string? password, string? dbEngine = null, string? root = null)
     {
         EnvironmentSettings env;
         if (envName != null)
@@ -53,12 +58,13 @@ public sealed class AppSettings
             env = new EnvironmentSettings
             {
                 Url = found.Url, Login = found.Login, Password = found.Password,
-                IsNetCore = found.IsNetCore, TimeoutMinutes = found.TimeoutMinutes, DbEngine = found.DbEngine
+                IsNetCore = found.IsNetCore, TimeoutMinutes = found.TimeoutMinutes, DbEngine = found.DbEngine, Path = found.Path
             };
         }
         else env = new EnvironmentSettings();
 
         if (dbEngine != null) env.DbEngine = dbEngine;
+        if (root != null) env.Path = root;
         if (url != null) env.Url = url;
         if (login != null) env.Login = login;
         if (password != null) env.Password = password;

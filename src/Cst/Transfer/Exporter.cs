@@ -11,17 +11,34 @@ public sealed partial class Exporter(CreatioClient client)
     [GeneratedRegex(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")]
     private static partial Regex GuidRegex();
 
-    public async Task<Manifest> ExportAsync(List<SchemaListPackage> list, string outPath)
+    public async Task<Manifest> ExportAsync(List<SchemaListPackage> list, string outPath, List<string>? fileEntries = null)
     {
-        if (list.Count == 0 || list.All(p => p.Entries.Count == 0))
+        fileEntries ??= [];
+        list = list.Where(p => p.Entries.Count > 0).ToList();
+        if (list.Count == 0 && fileEntries.Count == 0)
             throw new ArgumentException("The schema list is empty.");
-
-        Log.Info($"Downloading packages from {client.Url}: {string.Join(", ", list.Select(p => p.Source))}");
-        var zip = await client.GetZipPackagesAsync(list.Select(p => p.Source));
-        var sources = PackageGz.ReadZip(zip);
 
         var manifest = new Manifest { SourceUrl = client.Url };
         var errors = new List<string>();
+
+        // Files of the Creatio folder (files: section): need the source environment's root folder.
+        Dictionary<string, byte[]>? fileBytes = null;
+        if (fileEntries.Count > 0)
+        {
+            var root = client.RootPath ?? throw new ArgumentException(
+                $"The list has a files section, but the source environment has no Creatio root folder: set \"Path\" for it in appsettings.json (like clio's EnvironmentPath).");
+            var relative = FileTransfer.Resolve(root, fileEntries, errors);
+            if (errors.Count > 0) throw new TransferException(errors);
+            (manifest.Files, fileBytes) = FileTransfer.Read(root, relative);
+            Log.Info($"Files from {root}: {manifest.Files.Count} ({manifest.Files.Sum(f => f.Size) / 1024} KB)");
+        }
+
+        var sources = new Dictionary<string, PackageContent>(StringComparer.OrdinalIgnoreCase);
+        if (list.Count > 0)
+        {
+            Log.Info($"Downloading packages from {client.Url}: {string.Join(", ", list.Select(p => p.Source))}");
+            sources = PackageGz.ReadZip(await client.GetZipPackagesAsync(list.Select(p => p.Source)));
+        }
 
         foreach (var pkg in list)
         {
@@ -78,7 +95,7 @@ public sealed partial class Exporter(CreatioClient client)
         ComputeOrder(manifest);
         var exports = await ExportSchemaFilesAsync(manifest);
 
-        TransferArchive.Write(outPath, manifest, sources, exports);
+        TransferArchive.Write(outPath, manifest, sources, exports, fileBytes);
         Log.Info($"Archive written: {Path.GetFullPath(outPath)}");
         return manifest;
     }

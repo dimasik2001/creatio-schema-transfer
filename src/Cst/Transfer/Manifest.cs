@@ -66,6 +66,8 @@ public sealed class Manifest
     public List<ManifestPackage> Packages { get; set; } = [];
     public List<ManifestItem> Items { get; set; } = [];
     public List<ExternalDependency> External { get; set; } = [];
+    /// <summary>Plain files of the Creatio folder (files: section), stored under files/ in the archive.</summary>
+    public List<ManifestFile> Files { get; set; } = [];
     public List<string> Warnings { get; set; } = [];
 
     public static readonly JsonSerializerOptions Json = new()
@@ -87,7 +89,7 @@ public static class TransferArchive
     public const string ManifestName = "manifest.json";
 
     public static void Write(string path, Manifest manifest, IReadOnlyDictionary<string, PackageContent> sources,
-        IReadOnlyDictionary<string, string> exports)
+        IReadOnlyDictionary<string, string> exports, IReadOnlyDictionary<string, byte[]>? plainFiles = null)
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (dir != null) Directory.CreateDirectory(dir);
@@ -114,6 +116,23 @@ public static class TransferArchive
             using var s = e.Open();
             s.Write(System.Text.Encoding.UTF8.GetBytes(text));
         }
+        foreach (var (entryPath, bytes) in plainFiles ?? new Dictionary<string, byte[]>())
+        {
+            var e = zip.CreateEntry(entryPath);
+            using var s = e.Open();
+            s.Write(bytes);
+        }
+    }
+
+    /// <summary>Reads a binary entry (such as a transferred file) from the archive.</summary>
+    public static byte[] ReadBytes(string archivePath, string entryPath)
+    {
+        using var zip = ZipFile.OpenRead(archivePath);
+        var e = zip.GetEntry(entryPath) ?? throw new InvalidDataException($"Archive is missing {entryPath}.");
+        using var s = e.Open();
+        using var ms = new MemoryStream();
+        s.CopyTo(ms);
+        return ms.ToArray();
     }
 
     /// <summary>Reads a text entry (such as a schema export) from the archive.</summary>

@@ -33,6 +33,9 @@ public sealed class CreatioClient : IDisposable
 
     public string Url => _base.ToString().TrimEnd('/');
 
+    /// <summary>Creatio installation root folder on this machine (environment "Path"), or null when not configured.</summary>
+    public string? RootPath => string.IsNullOrWhiteSpace(_env.Path) ? null : _env.Path;
+
     /// <summary>The user cst works as (for CreatedBy/ModifiedBy of rows written by SQL).</summary>
     public string Login => _env.Login;
 

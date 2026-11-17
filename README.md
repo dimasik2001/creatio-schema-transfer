@@ -32,7 +32,20 @@ List file:
 package LVBase -> UsrBase:
  - SchemaName
  - SomeDataBinding [data]
+files:
+ - Terrasoft.WebApp\Terrasoft.Configuration\bin\Terrasoft.Configuration.dll
 ```
+
+### Files
+
+The `files:` section carries plain files of the Creatio installation folder. It needs the root folder of
+both stands as seen from the machine running cst: `"Path"` in the environment (like clio's
+`EnvironmentPath`) or `--root`. Entries are relative to the root: a file, a folder (all files below it) or
+a file-name mask (`Terrasoft.WebApp\bin\Utk*.dll`); paths outside the root are rejected.
+On import the files are written last, after compilation (which rewrites `Terrasoft.Configuration\bin`):
+identical files (SHA-256) are skipped, replaced ones are backed up, and locked files stop the import before
+anything is changed. `restore` puts replaced files back and deletes files the import created.
+Files in a `bin` folder or `*.config` take effect after the Creatio application restarts.
 
 - Target packages must already exist; missing packages, package dependencies or schemas are listed in
   `<archive>.missing.md` and nothing is installed (exit code 3).

@@ -24,7 +24,10 @@ public sealed class SchemaListPackage
 /// package LVBase -> UsrBase:
 ///  - SchemaName
 ///  - SomeBinding [data]
+/// files:
+///  - Terrasoft.WebApp\Terrasoft.Configuration\bin\Terrasoft.Configuration.dll
 /// </code>
+/// The files section needs the environment's root folder (Path).
 /// Also accepts the command-line form "LVBase->UsrBase:A,B;LVJS:C".
 /// </summary>
 public static partial class SchemaList
@@ -35,19 +38,46 @@ public static partial class SchemaList
     [GeneratedRegex(@"^-\s*(?<name>[\w.]+)\s*(\[(?<kind>\w+)\])?\s*$")]
     private static partial Regex EntryLine();
 
+    [GeneratedRegex(@"^files\s*:\s*$", RegexOptions.IgnoreCase)]
+    private static partial Regex FilesLine();
+
+    [GeneratedRegex(@"^-\s*(?<path>.+?)\s*$")]
+    private static partial Regex FileEntryLine();
+
     public static List<SchemaListPackage> ParseFile(string path) => Parse(File.ReadAllLines(path), path);
 
-    public static List<SchemaListPackage> Parse(IEnumerable<string> lines, string source = "<input>")
+    /// <summary>Entries of the `files:` section (paths relative to the Creatio root folder).</summary>
+    public static List<string> ParseFilesSection(string path)
+    {
+        var files = new List<string>();
+        ParseCore(File.ReadAllLines(path), path, files);
+        return files;
+    }
+
+    public static List<SchemaListPackage> Parse(IEnumerable<string> lines, string source = "<input>") => ParseCore(lines, source, null);
+
+    private static List<SchemaListPackage> ParseCore(IEnumerable<string> lines, string source, List<string>? files)
     {
         var result = new List<SchemaListPackage>();
         SchemaListPackage? current = null;
+        bool inFiles = false;
         int n = 0;
         foreach (var raw in lines)
         {
             n++;
             var line = StripComment(raw).Trim();
             if (line.Length == 0) continue;
+            if (FilesLine().IsMatch(line)) { inFiles = true; current = null; continue; }
             var pm = PackageLine().Match(line);
+            if (pm.Success) inFiles = false;
+            if (inFiles)
+            {
+                var fm = FileEntryLine().Match(line);
+                if (!fm.Success) throw new FormatException($"{source}:{n}: expected ' - <path>' in the files section, got '{raw.Trim()}'.");
+                var p = fm.Groups["path"].Value;
+                if (files != null && !files.Contains(p, StringComparer.OrdinalIgnoreCase)) files.Add(p);
+                continue;
+            }
             if (pm.Success)
             {
                 var src = pm.Groups["src"].Value;
