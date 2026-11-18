@@ -115,12 +115,12 @@ public static class FileTransfer
             Directory.CreateDirectory(System.IO.Path.GetDirectoryName(p.FullPath)!);
             var temp = p.FullPath + ".cst-tmp";
             File.WriteAllBytes(temp, bytes);
-            File.Move(temp, p.FullPath, overwrite: true);
+            if (File.Exists(p.FullPath)) File.Delete(p.FullPath); File.Move(temp, p.FullPath);
             records.Add(new JsonObject
             {
                 ["path"] = p.File.Path,
                 ["fullPath"] = p.FullPath,
-                ["backup"] = backup == null ? null : System.IO.Path.GetRelativePath(workDir, backup)
+                ["backup"] = backup == null ? null : Io.GetRelativePath(workDir, backup)
             });
             Log.Debug($"{p.File.Path}: {(p.State == "new" ? "created" : "replaced")}");
         }
@@ -173,7 +173,7 @@ public static class FileTransfer
     private static bool Inside(string rootFull, string full) =>
         full.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) && full.Length > rootFull.Length;
 
-    private static string Relative(string rootFull, string full) => System.IO.Path.GetRelativePath(rootFull, full).Replace('\\', '/');
+    private static string Relative(string rootFull, string full) => Io.GetRelativePath(rootFull, full).Replace('\\', '/');
 
-    private static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    private static string Hash(byte[] bytes) => Io.ToHex(Io.Sha256(bytes)).ToLowerInvariant();
 }

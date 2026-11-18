@@ -71,7 +71,7 @@ public static class PackageGz
         {
             var entry = archive.CreateEntry(packageName + ".gz", CompressionLevel.NoCompression);
             using var s = entry.Open();
-            s.Write(Write(content));
+            { var __b = Write(content); s.Write(__b, 0, __b.Length); }
         }
         return ms.ToArray();
     }

@@ -8,8 +8,8 @@ namespace Cst.Transfer;
 
 public sealed partial class Exporter(CreatioClient client)
 {
-    [GeneratedRegex(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")]
-    private static partial Regex GuidRegex();
+    private static readonly Regex _guidRegex = new(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
+    private static Regex GuidRegex() => _guidRegex;
 
     public async Task<Manifest> ExportAsync(List<SchemaListPackage> list, string outPath, List<string>? fileEntries = null)
     {

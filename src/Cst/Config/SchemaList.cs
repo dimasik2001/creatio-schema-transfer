@@ -32,17 +32,17 @@ public sealed class SchemaListPackage
 /// </summary>
 public static partial class SchemaList
 {
-    [GeneratedRegex(@"^package\s+(?<src>[\w.]+)\s*(->\s*(?<dst>[\w.]+))?\s*:?\s*$", RegexOptions.IgnoreCase)]
-    private static partial Regex PackageLine();
+    private static readonly Regex _packageLine = new(@"^package\s+(?<src>[\w.]+)\s*(->\s*(?<dst>[\w.]+))?\s*:?\s*$", RegexOptions.IgnoreCase);
+    private static Regex PackageLine() => _packageLine;
 
-    [GeneratedRegex(@"^-\s*(?<name>[\w.]+)\s*(\[(?<kind>\w+)\])?\s*$")]
-    private static partial Regex EntryLine();
+    private static readonly Regex _entryLine = new(@"^-\s*(?<name>[\w.]+)\s*(\[(?<kind>\w+)\])?\s*$");
+    private static Regex EntryLine() => _entryLine;
 
-    [GeneratedRegex(@"^files\s*:\s*$", RegexOptions.IgnoreCase)]
-    private static partial Regex FilesLine();
+    private static readonly Regex _filesLine = new(@"^files\s*:\s*$", RegexOptions.IgnoreCase);
+    private static Regex FilesLine() => _filesLine;
 
-    [GeneratedRegex(@"^-\s*(?<path>.+?)\s*$")]
-    private static partial Regex FileEntryLine();
+    private static readonly Regex _fileEntryLine = new(@"^-\s*(?<path>.+?)\s*$");
+    private static Regex FileEntryLine() => _fileEntryLine;
 
     public static List<SchemaListPackage> ParseFile(string path) => Parse(File.ReadAllLines(path), path);
 
@@ -108,13 +108,13 @@ public static partial class SchemaList
     public static List<SchemaListPackage> ParseInline(string spec)
     {
         var lines = new List<string>();
-        foreach (var part in spec.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var part in spec.Split(new[]{';'}, StringSplitOptions.RemoveEmptyEntries))
         {
             var colon = part.IndexOf(':');
             if (colon < 0) throw new FormatException($"--schemas: '{part}' must look like Package:Schema1,Schema2.");
             lines.Add("package " + part[..colon].Trim() + ":");
-            lines.AddRange(part[(colon + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Select(s => "- " + s));
+            lines.AddRange(part[(colon + 1)..].Split(new[]{','}, StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => "- " + s.Trim()));
         }
         return Parse(lines, "--schemas");
     }

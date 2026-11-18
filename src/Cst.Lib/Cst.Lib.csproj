@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- cst compiled as a .NET Framework 4.8 class library so Windows PowerShell 5.1 can load it
+       in-process (Add-Type / Assembly.LoadFrom) on PCs where running cst.exe is blocked.
+       Same source as the net10 exe; only Program.cs (top-level entry) is excluded. -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <OutputType>Library</OutputType>
+    <AssemblyName>cst</AssemblyName>
+    <RootNamespace>Cst</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Version>0.1.0</Version>
+    <DefineConstants>$(DefineConstants);NETFRAMEWORK_POLYFILL</DefineConstants>
+    <!-- Copy all dependency DLLs (System.Text.Json and its chain) next to cst.dll so the loader can find them. -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- net48 framework assemblies that are not auto-referenced by the SDK. -->
+    <Reference Include="System.Net.Http" />
+    <Reference Include="System.Web" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
+  </ItemGroup>
+
+  <!-- Pull in the shared cst sources, excluding the exe-only top-level Program.cs. -->
+  <ItemGroup>
+    <Compile Include="..\Cst\**\*.cs"
+             Exclude="..\Cst\Program.cs;..\Cst\obj\**\*.cs;..\Cst\bin\**\*.cs" />
+  </ItemGroup>
+
+</Project>

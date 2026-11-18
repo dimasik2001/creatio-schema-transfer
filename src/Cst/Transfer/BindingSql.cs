@@ -22,7 +22,7 @@ public static class BindingSql
     /// <param name="folder">"Data/&lt;Name&gt;/" inside <paramref name="source"/>.</param>
     /// <param name="cultures">Culture names that exist on the target.</param>
     public static Result Build(int dbEngineType, PackageContent source, string folder, Guid bindingUId, string bindingName,
-        Guid packageUId, string login, IReadOnlySet<string> cultures)
+        Guid packageUId, string login, ISet<string> cultures)
     {
         Dialect sql = dbEngineType switch
         {
@@ -72,7 +72,7 @@ public static class BindingSql
         var skipped = new List<string>();
         var lczPrefix = folder + "Localization/data.";
         foreach (var file in source.Files.Keys.Where(k => k.StartsWith(lczPrefix, StringComparison.OrdinalIgnoreCase)
-                                                          && k.EndsWith(".json", StringComparison.OrdinalIgnoreCase)).Order(StringComparer.Ordinal))
+                                                          && k.EndsWith(".json", StringComparison.OrdinalIgnoreCase)).OrderBy(x => x, StringComparer.Ordinal))
         {
             var culture = file[lczPrefix.Length..^".json".Length];
             if (!cultures.Contains(culture)) { skipped.Add(culture); continue; }
@@ -145,7 +145,7 @@ public static class BindingSql
         public override string True => "1";
         public override string False => "0";
         public override string Top1Start => "TOP 1 ";
-        public override string Bytes(byte[] b) => "0x" + Convert.ToHexString(b);
+        public override string Bytes(byte[] b) => "0x" + Io.ToHex(b);
         public override string Text(string s) => "N'" + s.Replace("'", "''") + "'";
         public override string Fail(string condition, string message) => $"IF {condition} THROW 50001, N'{message.Replace("'", "''")}', 1;";
         public override string If(string condition, string then, string @else) => $"IF {condition}\nBEGIN\n{then}\nEND\nELSE\nBEGIN\n{@else}\nEND;";

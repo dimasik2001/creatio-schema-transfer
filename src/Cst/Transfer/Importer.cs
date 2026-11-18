@@ -198,7 +198,7 @@ public sealed class Importer(CreatioClient client)
             ["sqlBackups"] = new JsonArray(), ["dataBackups"] = new JsonArray(), ["fileBackups"] = new JsonArray()
         };
         var restorePath = Path.Combine(options.WorkDir, "restore.json");
-        async Task SaveRestore() => await File.WriteAllTextAsync(restorePath, restore.ToJsonString(Manifest.Json));
+        async Task SaveRestore() => await Io.WriteAllTextAsync(restorePath, restore.ToJsonString(Manifest.Json));
 
         try
         {
@@ -335,14 +335,15 @@ public sealed class Importer(CreatioClient client)
                 var toInstall = new List<Guid>();
                 foreach (var b in prepared.Where(b => b.Install))
                 {
-                    await installer.WriteBindingBySqlAsync(b);
+                    var w = await installer.WriteBindingBySqlAsync(b);
+                    if (w is not { } written) continue; // skipped on a name/UId conflict
                     ((JsonArray)restore["dataBackups"]!).Add(new JsonObject
                     {
-                        ["name"] = b.Item.Name, ["isNew"] = !b.Exists,
+                        ["name"] = written.Name, ["isNew"] = written.Created,
                         ["backup"] = JsonSerializer.SerializeToNode(b.Backup, Manifest.Json)
                     });
                     await SaveRestore();
-                    toInstall.Add(b.Item.UId);
+                    toInstall.Add(written.InstallUId);
                 }
                 if (toInstall.Count > 0)
                 {
@@ -449,12 +450,12 @@ public sealed class Importer(CreatioClient client)
             {
                 if (!md.TryGetValue(item.Name, out var text)) throw new InstallException($"Could not back up {item.Name} from the target.");
                 var file = Path.Combine(mdDir, item.Name + ".md");
-                await File.WriteAllTextAsync(file, text, new UTF8Encoding(false));
+                await Io.WriteAllTextAsync(file, text, new UTF8Encoding(false));
                 ((JsonArray)restore["schemaBackups"]!).Add(new JsonObject
                 {
                     ["package"] = t.Name, ["packageUId"] = t.UId.ToString(), ["name"] = item.Name,
                     ["uId"] = item.UId.ToString(), ["manager"] = item.Manager,
-                    ["file"] = Path.GetRelativePath(options.WorkDir, file)
+                    ["file"] = Io.GetRelativePath(options.WorkDir, file)
                 });
             }
         }

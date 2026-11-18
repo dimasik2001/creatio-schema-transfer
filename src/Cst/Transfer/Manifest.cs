@@ -107,20 +107,20 @@ public static class TransferArchive
                 var bytes = content.Get(f) ?? throw new InvalidOperationException($"{pkg.Source}: file {f} is missing.");
                 var e = zip.CreateEntry($"packages/{pkg.Source}/{f}");
                 using var s = e.Open();
-                s.Write(bytes);
+                s.Write(bytes, 0, bytes.Length);
             }
         }
         foreach (var (entryPath, text) in exports)
         {
             var e = zip.CreateEntry(entryPath);
             using var s = e.Open();
-            s.Write(System.Text.Encoding.UTF8.GetBytes(text));
+            { var __b = System.Text.Encoding.UTF8.GetBytes(text); s.Write(__b, 0, __b.Length); }
         }
         foreach (var (entryPath, bytes) in plainFiles ?? new Dictionary<string, byte[]>())
         {
             var e = zip.CreateEntry(entryPath);
             using var s = e.Open();
-            s.Write(bytes);
+            s.Write(bytes, 0, bytes.Length);
         }
     }
 
@@ -158,7 +158,7 @@ public static class TransferArchive
         var sources = new Dictionary<string, PackageContent>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in zip.Entries)
         {
-            if (!e.FullName.StartsWith("packages/", StringComparison.Ordinal) || e.FullName.EndsWith('/')) continue;
+            if (!e.FullName.StartsWith("packages/", StringComparison.Ordinal) || e.FullName.EndsWith("/")) continue;
             var rest = e.FullName["packages/".Length..];
             var slash = rest.IndexOf('/');
             var pkg = rest[..slash];

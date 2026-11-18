@@ -461,13 +461,102 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         return new SqlBinding(item, source, targetPackageName, backup, true, bindingExistsOnTarget);
     }
 
-    /// <summary>SQL path, step 2: backs up the binding files on the target and stores the binding with a temporary script.</summary>
-    public async Task WriteBindingBySqlAsync(SqlBinding b)
+    /// <summary>What WriteBindingBySqlAsync did: the UId InstallData must use, the stored Name, and whether a new
+    /// binding row was created (vs an existing one updated). Null result means the binding was skipped.</summary>
+    public readonly record struct BindingWrite(Guid InstallUId, string Name, bool Created);
+
+    /// <summary>
+    /// SQL path, step 2: backs up the binding files on the target and stores the binding with a temporary script.
+    /// Returns null when the binding was skipped (a name/UId conflict the user chose not to install).
+    /// If the target already has a binding of this Name under another UId, the user is asked, in the console, to
+    /// rename the incoming binding, adopt the target's UId (update that binding in place), skip it, or abort —
+    /// instead of the SQL failing opaquely on that collision.
+    /// </summary>
+    public async Task<BindingWrite?> WriteBindingBySqlAsync(SqlBinding b)
     {
-        if (b.Exists) b.Backup.BindingBackupDir = await SaveBindingBackupAsync(b.TargetPackageName, b.Item.Name);
-        await WriteBindingAsync(b.Source, $"Data/{b.Item.Name}/", b.Item.UId, b.Item.Name, b.Backup.PackageUId);
-        Log.Info($"  {b.Item.Name}: binding written by SQL ({(b.Exists ? "updated" : "new")}); "
-                 + $"{b.Backup.Inserted.Count} new, {b.Backup.Updated.Count} existing row(s)");
+        var name = b.Item.Name;
+        var uId = b.Item.UId;
+        var created = !b.Exists; // by default: new unless the same UId is already on the target
+        var content = await GetTargetPackageAsync(b.TargetPackageName);
+        var targetUId = TargetBindingUId(content, name);
+        if (targetUId is { } tUId && tUId != b.Item.UId)
+        {
+            var decision = ResolveBindingConflict(b.TargetPackageName, name, tUId, b.Item.UId);
+            switch (decision.Action)
+            {
+                case ConflictAction.Skip:
+                    Log.Info($"  {b.Item.Name}: skipped (the target keeps its own binding under UId {tUId})");
+                    return null;
+                case ConflictAction.Abort:
+                    throw new CreatioException(
+                        $"{b.Item.Name}: the target package {b.TargetPackageName} already has a data binding named "
+                        + $"'{name}' under another UId ({tUId}); import aborted at the user's choice.");
+                case ConflictAction.Rename:
+                    name = decision.NewName!;
+                    created = TargetBindingUId(content, name) != b.Item.UId; // a new name is normally a new binding
+                    Log.Info($"  {b.Item.Name}: incoming binding renamed to '{name}' to avoid the conflict");
+                    break;
+                case ConflictAction.UseTargetUId:
+                    uId = tUId; // write under the target's UId: updates that binding in place
+                    created = false;
+                    b.Backup.BindingUId = tUId;
+                    Log.Info($"  {b.Item.Name}: using the target's UId {tUId}; its existing binding is updated in place");
+                    break;
+            }
+        }
+        if (!created) b.Backup.BindingBackupDir = await SaveBindingBackupAsync(b.TargetPackageName, name);
+        // Source files are under the archive's original name; the stored Name and UId are the effective ones.
+        await WriteBindingAsync(b.Source, $"Data/{b.Item.Name}/", uId, name, b.Backup.PackageUId);
+        Log.Info($"  {(name == b.Item.Name ? b.Item.Name : b.Item.Name + " -> " + name)}: binding written by SQL "
+                 + $"({(created ? "new" : "updated")}); {b.Backup.Inserted.Count} new, {b.Backup.Updated.Count} existing row(s)");
+        return new BindingWrite(uId, name, created);
+    }
+
+    public enum ConflictAction { Rename, UseTargetUId, Skip, Abort }
+    public readonly record struct ConflictDecision(ConflictAction Action, string? NewName);
+
+    /// <summary>
+    /// Asks the user, on the console, what to do about a data binding whose Name already exists on the target under
+    /// another UId. With no interactive console (input redirected), keeps the safe default: abort.
+    /// </summary>
+    private ConflictDecision ResolveBindingConflict(string package, string name, Guid targetUId, Guid archiveUId)
+    {
+        if (Console.IsInputRedirected)
+            return new ConflictDecision(ConflictAction.Abort, null);
+        while (true)
+        {
+            Console.Error.WriteLine();
+            Console.Error.WriteLine($"  Conflict: package {package} already has a data binding named '{name}'");
+            Console.Error.WriteLine($"            on the target under UId {targetUId} (the archive's UId is {archiveUId}).");
+            Console.Error.WriteLine("    [R]ename  - store the incoming binding under a new name (keeps the target's one)");
+            Console.Error.WriteLine("    [U]se UId - write the incoming data under the target's UId (updates it in place)");
+            Console.Error.WriteLine("    [S]kip    - leave the target's binding as is");
+            Console.Error.WriteLine("    [A]bort   - stop the import");
+            Console.Error.Write("  Choice [R/U/S/A]: ");
+            var choice = Console.ReadLine()?.Trim().ToLowerInvariant();
+            switch (choice)
+            {
+                case "u" or "use" or "uid":
+                    return new ConflictDecision(ConflictAction.UseTargetUId, null);
+                case "s" or "skip":
+                    return new ConflictDecision(ConflictAction.Skip, null);
+                case "a" or "abort" or "" or null:
+                    return new ConflictDecision(ConflictAction.Abort, null);
+                case "r" or "rename":
+                    Console.Error.Write($"  New name for the incoming binding (empty to cancel): ");
+                    var newName = Console.ReadLine()?.Trim();
+                    if (string.IsNullOrEmpty(newName)) continue;
+                    if (string.Equals(newName, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.Error.WriteLine("  That is the conflicting name. Pick a different one.");
+                        continue;
+                    }
+                    return new ConflictDecision(ConflictAction.Rename, newName);
+                default:
+                    Console.Error.WriteLine("  Please answer R, U, S or A.");
+                    continue;
+            }
+        }
     }
 
     private static List<DataColumn> ReadColumns(JsonObject d) =>
@@ -667,15 +756,26 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
 
     private readonly Dictionary<string, PackageContent> _targetPackages = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Copies the binding's files from the target package (as exported now) to backup/data/&lt;Name&gt;/.</summary>
-    private async Task<string?> SaveBindingBackupAsync(string packageName, string bindingName)
+    /// <summary>The target package content (downloaded once and cached).</summary>
+    private async Task<PackageContent> GetTargetPackageAsync(string packageName)
     {
-        if (WorkDir == null) return null;
         if (!_targetPackages.TryGetValue(packageName, out var content))
         {
             var zip = PackageGz.ReadZip(await client.GetZipPackagesAsync([packageName]));
             _targetPackages[packageName] = content = zip.GetValueOrDefault(packageName) ?? zip.Values.FirstOrDefault() ?? new PackageContent();
         }
+        return content;
+    }
+
+    /// <summary>UId of a data binding with this Name in the target package, or null if there is none.</summary>
+    private static Guid? TargetBindingUId(PackageContent content, string name)
+        => content.ElementDescriptor(ItemKind.Data, name)?["UId"]?.ToString() is { } s && Guid.TryParse(s, out var g) ? g : null;
+
+    /// <summary>Copies the binding's files from the target package (as exported now) to backup/data/&lt;Name&gt;/.</summary>
+    private async Task<string?> SaveBindingBackupAsync(string packageName, string bindingName)
+    {
+        if (WorkDir == null) return null;
+        var content = await GetTargetPackageAsync(packageName);
         var prefix = $"Data/{bindingName}/";
         var files = content.Files.Where(f => f.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList();
         if (files.Count == 0)
@@ -688,7 +788,7 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         {
             var target = Path.Combine(WorkDir, rel, path[prefix.Length..].Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            await File.WriteAllBytesAsync(target, bytes);
+            await Io.WriteAllBytesAsync(target, bytes);
         }
         return rel;
     }
@@ -700,7 +800,7 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         var content = new PackageContent();
         var folder = $"Data/{backup.BindingName}/";
         foreach (var f in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
-            content.Set(folder + Path.GetRelativePath(dir, f).Replace(Path.DirectorySeparatorChar, '/'), await File.ReadAllBytesAsync(f));
+            content.Set(folder + Io.GetRelativePath(dir, f).Replace(Path.DirectorySeparatorChar, '/'), await Io.ReadAllBytesAsync(f));
         await WriteBindingAsync(content, folder, backup.BindingUId, backup.BindingName, backup.PackageUId);
     }
 
@@ -750,7 +850,7 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
                 continue;
             }
             var bytes = source.Get(file) ?? [];
-            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) bytes = bytes[3..];
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF) bytes = bytes.Skip(3).ToArray();
             await client.ExecuteDataQueryAsync("InsertQuery", new JsonObject
             {
                 ["RootSchemaName"] = "SysPackageDataLcz",
@@ -959,8 +1059,8 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         return result;
     }
 
-    [GeneratedRegex(@"^/Date\((?<ms>-?\d+)(?<off>[+-]\d{4})?\)/$")]
-    private static partial Regex MsDate();
+    private static readonly Regex _msDate = new(@"^/Date\((?<ms>-?\d+)(?<off>[+-]\d{4})?\)/$");
+    private static Regex MsDate() => _msDate;
 
     private static object? Convert(JsonNode? node, int dsType)
     {

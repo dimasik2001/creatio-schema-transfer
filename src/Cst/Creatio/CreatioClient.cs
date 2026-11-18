@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
@@ -168,7 +169,7 @@ public sealed class CreatioClient : IDisposable
         if (resp.IsSuccessStatusCode && list.Count == 1 && !(bytes.Length >= 2 && bytes[0] == 'P' && bytes[1] == 'K'))
         {
             var text = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true).ReadToEnd();
-            if (text.TrimStart().StartsWith('{') && CreatioMd.Parse(text)?["Name"]?.ToString() is { } mdName
+            if (text.TrimStart().StartsWith("{") && CreatioMd.Parse(text)?["Name"]?.ToString() is { } mdName
                 && mdName.Equals(list[0], StringComparison.OrdinalIgnoreCase))
             {
                 result[list[0]] = text;
