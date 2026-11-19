@@ -7,6 +7,14 @@ public sealed record PackageInfo(Guid Id, Guid UId, string Name, string Version,
 {
     /// <summary>Custom packages (InstallType 0) can be changed; repository/base packages cannot.</summary>
     public bool IsEditable => InstallType == 0;
+
+    /// <summary>
+    /// The user's own package (shown by default in the console UI): editable, or not maintained by the vendor
+    /// (base packages say "Terrasoft" on older cores and "Creatio" on 8.x/10.x).
+    /// </summary>
+    public bool IsOwn => IsEditable || !VendorMaintainers.Contains(Maintainer.Trim());
+
+    private static readonly HashSet<string> VendorMaintainers = new(StringComparer.OrdinalIgnoreCase) { "Terrasoft", "Creatio" };
 }
 
 /// <summary>An element (schema, SQL script or data binding) as registered in the target/source DB.</summary>
@@ -66,6 +74,32 @@ public sealed class Catalog(CreatioClient client)
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// Every schema, SQL script and data binding registered in one package, sorted by folder and name.
+    /// Three DataService queries; meant to be called lazily when the user opens the package.
+    /// </summary>
+    public async Task<List<PackageElement>> LoadPackageElementsAsync(Guid packageId)
+    {
+        var result = new List<PackageElement>();
+        var schemas = Query("SysSchema", ("UId", "UId"), ("Name", "Name"), ("ManagerName", "ManagerName"));
+        schemas["Filters"] = InFilter("SysPackage.Id", [packageId]);
+        foreach (var r in await client.SelectAsync(schemas))
+        {
+            var manager = S(r, "ManagerName");
+            result.Add(new PackageElement(G(r, "UId"), S(r, "Name"), ItemKind.Schema, manager, ElementFolders.Of(ItemKind.Schema, manager)));
+        }
+        foreach (var (table, kind) in new[] { ("SysPackageSqlScript", ItemKind.SqlScript), ("SysPackageSchemaData", ItemKind.Data) })
+        {
+            var q = Query(table, ("UId", "UId"), ("Name", "Name"));
+            q["Filters"] = InFilter("SysPackage.Id", [packageId]);
+            result.AddRange((await client.SelectAsync(q)).Select(r =>
+                new PackageElement(G(r, "UId"), S(r, "Name"), kind, null, ElementFolders.Of(kind, null))));
+        }
+        return result
+            .GroupBy(e => (e.Kind, e.UId)).Select(g => g.First()) // one row per element
+            .OrderBy(e => e.Folder).ThenBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>

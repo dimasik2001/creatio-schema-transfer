@@ -143,6 +143,63 @@ public static partial class SchemaList
         pkg.Entries.Add(new SchemaListEntry { Name = name, Kind = k });
     }
 
+    /// <summary>
+    /// List entries for elements selected in one package. A type hint is added only where the name is not unique
+    /// among <paramref name="allInPackage"/> (an entity and its data binding often share a name).
+    /// </summary>
+    public static SchemaListPackage Build(string source, string target, IEnumerable<(string Name, ItemKind Kind)> selected,
+        IEnumerable<(string Name, ItemKind Kind)> allInPackage)
+    {
+        var kindsByName = allInPackage.GroupBy(e => e.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.Kind).Distinct().Count(), StringComparer.OrdinalIgnoreCase);
+        var pkg = new SchemaListPackage { Source = source, Target = target };
+        foreach (var (name, kind) in selected.OrderBy(e => e.Name, StringComparer.OrdinalIgnoreCase).ThenBy(e => e.Kind))
+        {
+            bool ambiguous = kindsByName.TryGetValue(name, out var n) && n > 1;
+            AddEntry(pkg, name, ambiguous ? KindHint(kind) : null, "<build>");
+        }
+        return pkg;
+    }
+
+    /// <summary>Writes the list in the format <see cref="ParseFile"/> reads (package sections, then a files section).</summary>
+    public static string Write(IEnumerable<SchemaListPackage> packages, IEnumerable<string>? files = null, IEnumerable<string>? headerComments = null)
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in headerComments ?? []) sb.Append("# ").AppendLine(c);
+        foreach (var p in packages.Where(p => p.Entries.Count > 0))
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            if (!PackageLine().IsMatch($"package {p.Source} -> {p.Target}:"))
+                throw new FormatException($"Package names '{p.Source}' / '{p.Target}' cannot be written to a schema list.");
+            sb.AppendLine(p.Source.Equals(p.Target, StringComparison.Ordinal) ? $"package {p.Source}:" : $"package {p.Source} -> {p.Target}:");
+            foreach (var e in p.Entries)
+            {
+                var line = e.Kind is { } k ? $" - {e.Name} [{KindHint(k)}]" : $" - {e.Name}";
+                if (!EntryLine().IsMatch(line.Trim())) throw new FormatException($"'{e.Name}' cannot be written to a schema list.");
+                sb.AppendLine(line);
+            }
+        }
+        var fileList = files?.ToList() ?? [];
+        if (fileList.Count > 0)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.AppendLine("files:");
+            foreach (var f in fileList)
+            {
+                if (f.IndexOf('#') >= 0 || f.Trim().Length == 0) throw new FormatException($"File path '{f}' cannot be written to a schema list ('#' starts a comment).");
+                sb.Append(" - ").AppendLine(f.Trim());
+            }
+        }
+        return sb.ToString();
+    }
+
+    private static string KindHint(ItemKind kind) => kind switch
+    {
+        ItemKind.SqlScript => "sql",
+        ItemKind.Data => "data",
+        _ => "schema"
+    };
+
     private static string StripComment(string line)
     {
         var i = line.IndexOf('#');

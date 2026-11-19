@@ -33,6 +33,36 @@ public sealed partial class Exporter(CreatioClient client)
             Log.Info($"Files from {root}: {manifest.Files.Count} ({manifest.Files.Sum(f => f.Size) / 1024} KB)");
         }
 
+        var sources = await CollectItemsAsync(list, manifest);
+
+        await ResolveDependenciesAsync(manifest, sources);
+        ComputeOrder(manifest);
+        var exports = await ExportSchemaFilesAsync(manifest);
+
+        TransferArchive.Write(outPath, manifest, sources, exports, fileBytes);
+        Log.Info($"Archive written: {Path.GetFullPath(outPath)}");
+        return manifest;
+    }
+
+    /// <summary>
+    /// Elements of the user's own packages that the listed elements reference but the list does not contain
+    /// (the same GUID analysis as the export, no archive written). Only one level: what the selection itself needs.
+    /// </summary>
+    /// <param name="isOwnPackage">Keeps references into these packages; others (base packages) are expected on the target.</param>
+    public async Task<List<ExternalDependency>> FindReferencesAsync(List<SchemaListPackage> list, Func<string, bool> isOwnPackage)
+    {
+        list = list.Where(p => p.Entries.Count > 0).ToList();
+        if (list.Count == 0) return [];
+        var manifest = new Manifest { SourceUrl = client.Url };
+        var sources = await CollectItemsAsync(list, manifest);
+        await ResolveDependenciesAsync(manifest, sources);
+        return manifest.External.Where(e => isOwnPackage(e.SourcePackage)).ToList();
+    }
+
+    /// <summary>Downloads the listed packages and adds their listed elements to the manifest (packages and items).</summary>
+    private async Task<Dictionary<string, PackageContent>> CollectItemsAsync(List<SchemaListPackage> list, Manifest manifest)
+    {
+        var errors = new List<string>();
         var sources = new Dictionary<string, PackageContent>(StringComparer.OrdinalIgnoreCase);
         if (list.Count > 0)
         {
@@ -90,14 +120,7 @@ public sealed partial class Exporter(CreatioClient client)
         var dupes = manifest.Items.GroupBy(i => i.UId).Where(g => g.Count() > 1).ToList();
         if (dupes.Count > 0)
             throw new TransferException(dupes.Select(g => $"Element {g.First().Name} is listed more than once ({string.Join(", ", g.Select(i => i.SourcePackage))})."));
-
-        await ResolveDependenciesAsync(manifest, sources);
-        ComputeOrder(manifest);
-        var exports = await ExportSchemaFilesAsync(manifest);
-
-        TransferArchive.Write(outPath, manifest, sources, exports, fileBytes);
-        Log.Info($"Archive written: {Path.GetFullPath(outPath)}");
-        return manifest;
+        return sources;
     }
 
     /// <summary>
