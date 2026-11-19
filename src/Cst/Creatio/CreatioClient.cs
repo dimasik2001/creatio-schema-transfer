@@ -8,7 +8,29 @@ using Cst.Config;
 
 namespace Cst.Creatio;
 
-public sealed class CreatioException(string message) : Exception(message);
+public class CreatioException(string message) : Exception(message);
+
+public enum LoginFailure { InvalidCredentials, Locked, PasswordExpired, Other }
+
+/// <summary>AuthService refused the login. <see cref="Reason"/> lets a UI ask for the password again or stop.</summary>
+public sealed class LoginException(LoginFailure reason, string message) : CreatioException(message)
+{
+    public LoginFailure Reason { get; } = reason;
+
+    /// <summary>
+    /// Classifies an AuthService refusal. AuthService answers Code=1 with a (possibly localized) Message for every
+    /// refusal, so the reason is taken from PasswordChangeUrl and the message text; HTTP 401/403 = bad credentials.
+    /// </summary>
+    public static LoginFailure Classify(int httpStatus, string? message, bool passwordChange)
+    {
+        if (passwordChange) return LoginFailure.PasswordExpired;
+        var m = (message ?? "").ToLowerInvariant();
+        if (m.Contains("lock") || m.Contains("блок")) return LoginFailure.Locked;
+        if (httpStatus is 401 or 403 || m.Contains("password") || m.Contains("парол") || m.Contains("invalid")
+            || m.Contains("incorrect") || m.Contains("неверн") || m.Contains("невірн")) return LoginFailure.InvalidCredentials;
+        return LoginFailure.Other;
+    }
+}
 
 /// <summary>
 /// Thin client over standard Creatio endpoints: AuthService, DataService, PackageInstallerService,
@@ -61,10 +83,20 @@ public sealed class CreatioClient : IDisposable
             new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json"));
         var text = await resp.Content.ReadAsStringAsync();
         if (!resp.IsSuccessStatusCode)
-            throw new CreatioException($"Login failed: HTTP {(int)resp.StatusCode} {Shorten(text)}");
-        var json = JsonNode.Parse(text);
+        {
+            int status = (int)resp.StatusCode;
+            var reason = status is 401 or 403 ? LoginFailure.InvalidCredentials : LoginFailure.Other;
+            throw new LoginException(reason, $"Login failed: HTTP {status} {Shorten(text)}");
+        }
+        JsonNode? json;
+        try { json = JsonNode.Parse(text); }
+        catch (JsonException) { throw new LoginException(LoginFailure.Other, $"Login failed: unexpected answer {Shorten(text)}"); }
         if (json?["Code"]?.GetValue<int>() != 0)
-            throw new CreatioException($"Login failed: {json?["Message"]}");
+        {
+            var message = json?["Message"]?.ToString();
+            var passwordChange = !string.IsNullOrEmpty(json?["PasswordChangeUrl"]?.ToString());
+            throw new LoginException(LoginException.Classify(200, message, passwordChange), $"Login failed: {message}");
+        }
         var csrf = _cookies.GetCookies(_base)["BPMCSRF"]?.Value;
         if (csrf != null)
         {

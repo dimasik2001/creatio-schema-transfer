@@ -57,8 +57,27 @@ public sealed class ExternalDependency
     public List<string> RequiredBy { get; set; } = [];
 }
 
+/// <summary>A package transferred as a whole (packages: section), installed by Creatio's zip installer.</summary>
+public sealed class ManifestWholePackage
+{
+    public string Name { get; set; } = "";
+    public Guid UId { get; set; }
+    public string? Version { get; set; }
+    public string? Maintainer { get; set; }
+    /// <summary>Packages it depends on (from its descriptor); they must exist on the target or be in the archive.</summary>
+    public List<PackageRef> DependsOn { get; set; } = [];
+    /// <summary>Schema names in the package (to tell its compile errors from foreign ones).</summary>
+    public List<string> Schemas { get; set; } = [];
+    /// <summary>UIds of every schema, SQL script and data binding in the package (to find them in other target packages).</summary>
+    public List<Guid> ElementUIds { get; set; } = [];
+}
+
 public sealed class Manifest
 {
+    /// <summary>1 = elements and files; 2 = also whole packages (older cst refuses it instead of skipping them).</summary>
+    public const int CurrentFormat = 2;
+    public const string WholePackagesEntry = "whole/packages.zip";
+
     public int FormatVersion { get; set; } = 1;
     public string Tool { get; set; } = "cst";
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
@@ -68,6 +87,8 @@ public sealed class Manifest
     public List<ExternalDependency> External { get; set; } = [];
     /// <summary>Plain files of the Creatio folder (files: section), stored under files/ in the archive.</summary>
     public List<ManifestFile> Files { get; set; } = [];
+    /// <summary>Whole packages (packages: section), in the package zip at <see cref="WholePackagesEntry"/>.</summary>
+    public List<ManifestWholePackage> WholePackages { get; set; } = [];
     public List<string> Warnings { get; set; } = [];
 
     public static readonly JsonSerializerOptions Json = new()
@@ -93,6 +114,8 @@ public static class TransferArchive
     {
         var dir = Path.GetDirectoryName(Path.GetFullPath(path));
         if (dir != null) Directory.CreateDirectory(dir);
+        // Archives without whole packages stay format 1, readable by older cst versions.
+        manifest.FormatVersion = manifest.WholePackages.Count > 0 ? Manifest.CurrentFormat : 1;
         using var fs = File.Create(path);
         using var zip = new ZipArchive(fs, ZipArchiveMode.Create);
         var m = zip.CreateEntry(ManifestName);
@@ -152,8 +175,8 @@ public static class TransferArchive
         Manifest manifest;
         using (var s = me.Open())
             manifest = JsonSerializer.Deserialize<Manifest>(s, Manifest.Json) ?? throw new InvalidDataException("Empty manifest.");
-        if (manifest.FormatVersion != 1)
-            throw new InvalidDataException($"Unsupported archive format version {manifest.FormatVersion}.");
+        if (manifest.FormatVersion is < 1 or > Manifest.CurrentFormat)
+            throw new InvalidDataException($"Unsupported archive format version {manifest.FormatVersion} (this cst reads 1..{Manifest.CurrentFormat}); use a newer cst.");
 
         var sources = new Dictionary<string, PackageContent>(StringComparer.OrdinalIgnoreCase);
         foreach (var e in zip.Entries)

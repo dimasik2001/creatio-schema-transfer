@@ -1,0 +1,28 @@
+# Import wizard up to the dry run on test, then declines the installation (nothing is written to the stand).
+# Needs an archive from export-map-save.keys in the same settings folder (archives\ is listed newest first).
+Down                  # main menu: Import
+Enter
+wait:target stand
+Enter                 # test (last target, first in the list)
+wait:archive list
+Enter                 # newest archive
+wait:preview
+Enter                 # Continue
+wait:options
+Enter                 # no options
+Enter                 # default work dir
+wait:dry run plan
+Enter                 # "Install into test?" -> default No
+wait:main menu
+Down
+Down                  # Restore
+Enter
+Enter                 # test
+wait:work dirs (none recorded: type a path or back)
+Down                  # ← Back
+Enter
+wait:main menu again
+Down
+Down
+Down
+Enter                 # Quit

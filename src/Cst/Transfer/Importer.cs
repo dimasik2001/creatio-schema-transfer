@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -15,6 +16,18 @@ public sealed class ImportOptions
     public bool DataDesigner { get; init; }
     /// <summary>Folder for backups and restore.json.</summary>
     public required string WorkDir { get; init; }
+    /// <summary>
+    /// Decides what to do when a data binding's Name already exists on the target under another UId.
+    /// Null: ask on the console (abort when the input is redirected).
+    /// </summary>
+    public Func<ElementInstaller.BindingConflict, ElementInstaller.ConflictDecision>? ResolveBindingConflict { get; init; }
+}
+
+/// <summary>Stage names reported through <see cref="Log.Stage"/> during an import, in order.</summary>
+public static class ImportStages
+{
+    public const string Check = "Check", Packages = "Whole packages", SqlBefore = "SQL BeforePackage", Schemas = "Schemas", DbStructure = "DB structure",
+        Compile = "Compile", SqlAfter = "SQL AfterPackage", Data = "Data bindings", SqlAfterData = "SQL AfterSchemaData", Files = "Files";
 }
 
 public sealed class ImportResult
@@ -52,6 +65,7 @@ public sealed class Importer(CreatioClient client)
 
     public async Task<ImportResult> ImportAsync(string archivePath, ImportOptions options)
     {
+        Log.Stage(ImportStages.Check);
         var (manifest, sources) = TransferArchive.Read(archivePath);
         var result = new ImportResult { WorkDir = options.WorkDir };
         // From the environment's settings (DbEngine / --db-engine); checked before anything else.
@@ -73,8 +87,39 @@ public sealed class Importer(CreatioClient client)
         var errors = new List<string>();
         var missing = result.MissingDependencies;
 
-        // 1. External dependencies must already exist on the target.
-        foreach (var ext in manifest.External)
+        // 0. Whole packages (zip installer): their dependencies must be on the target or in the archive, and no
+        //    element of an existing target package may be modified locally (the installer would skip it). Decided:
+        //    stop before installing anything instead of a partial install.
+        var whole = manifest.WholePackages;
+        var wholeNames = whole.Select(w => w.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var w in whole)
+            foreach (var dep in w.DependsOn.Where(d => !pkgByName.ContainsKey(d.Name) && !wholeNames.Contains(d.Name)))
+                missing.Add($"Package **{w.Name}** depends on package **{dep.Name}**, which does not exist on the target. Install it first or add it to the packages: section.");
+        var wholeExisting = whole.Where(w => pkgByName.ContainsKey(w.Name)).Select(w => pkgByName[w.Name]).ToList();
+        if (wholeExisting.Count > 0)
+        {
+            string Kind(string table) => table switch { "SysPackageSqlScript" => "sql", "SysPackageSchemaData" => "data", _ => "schema" };
+            foreach (var g in (await catalog.FindLocallyModifiedAsync(wholeExisting.Select(p => p.Id))).GroupBy(m => m.Package))
+                errors.Add($"Package {g.Key} (packages: section) has {g.Count()} locally modified element(s) on the target, which Creatio's zip installer "
+                    + $"would not overwrite: {string.Join(", ", g.OrderBy(m => m.Name).Select(m => $"{m.Name} [{Kind(m.Table)}]"))}. Nothing was installed. "
+                    + "Transfer such a package element by element (a 'package X:' section) instead.");
+        }
+
+        // Elements of a whole package that live in ANOTHER package on the target (e.g. transferred there element by
+        // element earlier): the zip installer would move them or fail. Stop and list them.
+        foreach (var w in whole.Where(w => w.ElementUIds.Count > 0))
+        {
+            var elsewhere = (await catalog.FindElementsAsync(w.ElementUIds))
+                .Where(e => !e.PackageName.Equals(w.Name, StringComparison.OrdinalIgnoreCase))
+                .GroupBy(e => e.PackageName).ToList();
+            foreach (var g in elsewhere)
+                errors.Add($"Package {w.Name} (packages: section): {g.Count()} of its element(s) already exist on the target in package {g.Key} "
+                    + $"(same UId): {string.Join(", ", g.Select(e => e.Name).Distinct().OrderBy(n => n))}. Installing the package zip would move them "
+                    + "out of that package or fail. Nothing was installed.");
+        }
+
+        // 1. External dependencies must already exist on the target (or come with a whole package).
+        foreach (var ext in manifest.External.Where(e => !wholeNames.Contains(e.SourcePackage)))
             if (!onTarget.ContainsKey(ext.UId))
                 missing.Add($"{ext.Kind} **{ext.Name}** ({ext.UId}, package {ext.SourcePackage} on source) — required by {string.Join(", ", ext.RequiredBy)}");
 
@@ -100,7 +145,9 @@ public sealed class Importer(CreatioClient client)
             }
             if (!targets.TryGetValue(targetName, out var target))
             {
-                if (!pkgByName.TryGetValue(targetName, out var p))
+                if (!pkgByName.TryGetValue(targetName, out var p) && whole.FirstOrDefault(w => w.Name.Equals(targetName, StringComparison.OrdinalIgnoreCase)) is { } wp)
+                    p = new PackageInfo(Guid.Empty, wp.UId, wp.Name, wp.Version ?? "", wp.Maintainer ?? "", 0); // created by the zip install first
+                if (p == null)
                 {
                     if (!absentPackages.TryGetValue(targetName, out var list)) absentPackages[targetName] = list = [];
                     list.Add(item.Name);
@@ -164,7 +211,8 @@ public sealed class Importer(CreatioClient client)
         // Bindings: SQL path (exact copy of the source binding, binary columns included) on PostgreSQL and MSSql.
         var installer = new ElementInstaller(client, dbEngine)
         {
-            UseSqlBindings = BindingSql.Supports(dbEngine) && !options.DataDesigner, WorkDir = options.WorkDir
+            UseSqlBindings = BindingSql.Supports(dbEngine) && !options.DataDesigner, WorkDir = options.WorkDir,
+            ResolveConflict = options.ResolveBindingConflict
         };
         var ordered = manifest.Items.Where(i => itemTarget.ContainsKey(i.UId)).OrderBy(i => i.Order).ThenBy(i => i.Name).ToList();
         var sqlScripts = ordered.Where(i => i.Kind == ItemKind.SqlScript)
@@ -177,6 +225,11 @@ public sealed class Importer(CreatioClient client)
         if (options.DryRun)
         {
             Log.Info($"Dry run (target DB engine {DbEngineName(dbEngine)}). Planned steps:");
+            foreach (var w in whole)
+            {
+                var state = pkgByName.TryGetValue(w.Name, out var ex) ? $"replaces the target package (version {ex.Version} → {w.Version})" : "new package";
+                Log.Info($"  whole package (zip installer): {w.Name} — {state}, {w.Schemas.Count} schema(s)");
+            }
             foreach (var (phase, label) in new[] { (ElementInstaller.SqlBeforePackage, "SQL BeforePackage") })
                 foreach (var s in sqlScripts.Where(s => s.InstallType == phase)) Log.Info($"  {label}: {s.Item.Name}");
             foreach (var s in schemas) Log.Info($"  schema step {s.Order + 1}: {s.Name} ({ShortManager(s.Manager)}) → {itemTarget[s.UId].Name}");
@@ -195,13 +248,48 @@ public sealed class Importer(CreatioClient client)
         {
             ["targetUrl"] = client.Url, ["createdUtc"] = DateTime.UtcNow,
             ["schemaBackups"] = new JsonArray(), ["createdSchemas"] = new JsonArray(),
-            ["sqlBackups"] = new JsonArray(), ["dataBackups"] = new JsonArray(), ["fileBackups"] = new JsonArray()
+            ["sqlBackups"] = new JsonArray(), ["dataBackups"] = new JsonArray(), ["fileBackups"] = new JsonArray(),
+            ["wholeBackups"] = new JsonArray()
         };
         var restorePath = Path.Combine(options.WorkDir, "restore.json");
         async Task SaveRestore() => await Io.WriteAllTextAsync(restorePath, restore.ToJsonString(Manifest.Json));
 
         try
         {
+            // Whole packages first (single elements may reference them), as Creatio installs a package zip.
+            if (whole.Count > 0)
+            {
+                Log.Stage(ImportStages.Packages);
+                foreach (var w in whole)
+                {
+                    var entry = new JsonObject { ["name"] = w.Name, ["existed"] = pkgByName.ContainsKey(w.Name) };
+                    if (pkgByName.ContainsKey(w.Name))
+                    {
+                        Log.Info($"[{w.Name}] backing up the target package...");
+                        var file = Path.Combine("backup", "whole", w.Name + ".zip");
+                        Directory.CreateDirectory(Path.Combine(options.WorkDir, "backup", "whole"));
+                        File.WriteAllBytes(Path.Combine(options.WorkDir, file), await client.GetZipPackagesAsync([w.Name]));
+                        entry["file"] = file;
+                    }
+                    ((JsonArray)restore["wholeBackups"]!).Add(entry);
+                }
+                await SaveRestore();
+                var zipName = $"cst_{DateTime.Now:yyyyMMdd_HHmmss}.zip";
+                Log.Info($"Installing {whole.Count} whole package(s) with Creatio's zip installer: {string.Join(", ", whole.Select(w => w.Name))}...");
+                await client.UploadPackageAsync(zipName, TransferArchive.ReadBytes(archivePath, Manifest.WholePackagesEntry));
+                try { await client.InstallPackageAsync(zipName); }
+                catch (CreatioException ex)
+                {
+                    throw new CreatioException($"zip installer: {ex.Message} (log: {Path.Combine(options.WorkDir, "whole-packages-install.log")})");
+                }
+                finally
+                {
+                    try { await Io.WriteAllTextAsync(Path.Combine(options.WorkDir, "whole-packages-install.log"), await client.GetInstallLogAsync()); }
+                    catch (Exception ex) when (ex is CreatioException or IOException or HttpRequestException) { Log.Debug($"install log not saved: {ex.Message}"); }
+                }
+                result.Installed.AddRange(whole.Select(w => w.Name + " (whole)"));
+            }
+
             // SQL scripts are executed from the stored element, so they are saved first. The SQL designer validates
             // a script for the current DB engine against the DB when saving it (seen on 8.3/PostgreSQL), so
             // AfterPackage/AfterSchemaData scripts for this engine are saved only once the tables exist.
@@ -222,6 +310,7 @@ public sealed class Importer(CreatioClient client)
             bool SaveLate(ElementInstaller.SqlScript s) => s.DbEngineType == dbEngine && s.InstallType != ElementInstaller.SqlBeforePackage;
             if (sqlScripts.Count > 0)
             {
+                Log.Stage(ImportStages.SqlBefore);
                 var early = sqlScripts.Where(s => !SaveLate(s)).ToList();
                 Log.Info($"Saving {early.Count} SQL script(s) (BeforePackage and other DB engines)...");
                 await SaveScripts(early);
@@ -232,6 +321,7 @@ public sealed class Importer(CreatioClient client)
             // Schemas through the Configuration import, strictly in dependency order across all packages
             // (a user task before the processes that call it, a parent before its children).
             var entities = new List<Guid>();
+            if (schemas.Count > 0) Log.Stage(ImportStages.Schemas);
             foreach (var t in targets.Values)
                 await BackupSchemasAsync(t, schemas.Where(s => itemTarget[s.UId] == t).ToList(), onTarget, backupDir, restore, options);
             await SaveRestore();
@@ -278,19 +368,21 @@ public sealed class Importer(CreatioClient client)
             }
             if (entities.Count > 0)
             {
+                Log.Stage(ImportStages.DbStructure);
                 Log.Info($"Updating DB structure of {entities.Count} entity schema(s)...");
                 var msg = await client.UpdateDbStructureAsync(entities);
                 if (msg != null) result.Notes.Add($"UpdateDBStructure: {msg}");
             }
             foreach (var t in targets.Values) result.Installed.Add(t.Name);
 
-            if (!options.NoCompile && schemas.Count > 0)
+            if (!options.NoCompile && (schemas.Count > 0 || whole.Count > 0))
             {
+                Log.Stage(ImportStages.Compile);
                 Log.Info(options.FullRebuild ? "Compiling configuration (full rebuild)..." : "Compiling configuration...");
                 // Only errors in files of the imported schemas stop the import; a target may already have
                 // compile errors of its own (seen on the 8.3 test stand), which are reported as warnings.
                 var buildErrors = await client.BuildAsync(options.FullRebuild);
-                var names = schemas.Select(s => s.Name).ToList();
+                var names = schemas.Select(s => s.Name).Concat(whole.SelectMany(w => w.Schemas)).ToList();
                 bool Ours(string e) => names.Any(n => e.StartsWith(n + ".", StringComparison.OrdinalIgnoreCase)
                                                      || e.Contains("\\" + n + ".", StringComparison.OrdinalIgnoreCase)
                                                      || e.Contains("/" + n + ".", StringComparison.OrdinalIgnoreCase));
@@ -307,6 +399,7 @@ public sealed class Importer(CreatioClient client)
 
             if (sqlScripts.Count > 0)
             {
+                Log.Stage(ImportStages.SqlAfter);
                 var late = sqlScripts.Where(SaveLate).ToList();
                 if (late.Count > 0)
                 {
@@ -317,6 +410,7 @@ public sealed class Importer(CreatioClient client)
                 await installer.ExecuteSqlAsync(sqlScripts, ElementInstaller.SqlAfterPackage);
             }
 
+            if (data.Count > 0) Log.Stage(ImportStages.Data);
             if (data.Count > 0 && installer.UseSqlBindings)
             {
                 // As the package installer: store every binding, then one InstallData call for all of them.
@@ -376,6 +470,7 @@ public sealed class Importer(CreatioClient client)
 
             if (sqlScripts.Count > 0)
             {
+                Log.Stage(ImportStages.SqlAfterData);
                 Log.Info("SQL AfterSchemaData:");
                 await installer.ExecuteSqlAsync(sqlScripts, ElementInstaller.SqlAfterSchemaData);
             }
@@ -383,6 +478,7 @@ public sealed class Importer(CreatioClient client)
             // Files last: compilation above writes Terrasoft.Configuration\bin and would overwrite transferred files.
             if (filePlan.Count > 0)
             {
+                Log.Stage(ImportStages.Files);
                 var changed = filePlan.Count(p => p.State != "identical");
                 Log.Info($"Files into {fileRoot}: {changed} to write, {filePlan.Count - changed} identical...");
                 foreach (var line in FileTransfer.Describe(filePlan.Where(p => p.State != "identical").ToList())) Log.Info(line);

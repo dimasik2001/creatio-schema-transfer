@@ -93,6 +93,8 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
     public bool UseSqlBindings { get; init; }
     /// <summary>Import work dir: binding backups go to backup/data/&lt;Name&gt;/.</summary>
     public string? WorkDir { get; init; }
+    /// <summary>How to resolve a binding Name/UId conflict on the target; null = ask on the console.</summary>
+    public Func<BindingConflict, ConflictDecision>? ResolveConflict { get; init; }
 
     public async Task<DataBackup> InstallDataAsync(ManifestItem item, PackageContent source, Guid targetPackageUId, string targetPackageName, bool bindingExistsOnTarget)
     {
@@ -481,7 +483,11 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
         var targetUId = TargetBindingUId(content, name);
         if (targetUId is { } tUId && tUId != b.Item.UId)
         {
-            var decision = ResolveBindingConflict(b.TargetPackageName, name, tUId, b.Item.UId);
+            var conflict = new BindingConflict(b.TargetPackageName, name, tUId, b.Item.UId);
+            var decision = ResolveConflict != null ? ResolveConflict(conflict) : AskBindingConflict(conflict);
+            if (decision.Action == ConflictAction.Rename
+                && (string.IsNullOrWhiteSpace(decision.NewName) || string.Equals(decision.NewName, name, StringComparison.OrdinalIgnoreCase)))
+                throw new CreatioException($"{b.Item.Name}: a new name different from '{name}' is needed to rename the incoming binding.");
             switch (decision.Action)
             {
                 case ConflictAction.Skip:
@@ -514,13 +520,16 @@ public sealed partial class ElementInstaller(CreatioClient client, int dbEngineT
 
     public enum ConflictAction { Rename, UseTargetUId, Skip, Abort }
     public readonly record struct ConflictDecision(ConflictAction Action, string? NewName);
+    /// <summary>A data binding whose <paramref name="Name"/> exists in <paramref name="Package"/> on the target under another UId.</summary>
+    public readonly record struct BindingConflict(string Package, string Name, Guid TargetUId, Guid ArchiveUId);
 
     /// <summary>
     /// Asks the user, on the console, what to do about a data binding whose Name already exists on the target under
     /// another UId. With no interactive console (input redirected), keeps the safe default: abort.
     /// </summary>
-    private ConflictDecision ResolveBindingConflict(string package, string name, Guid targetUId, Guid archiveUId)
+    private static ConflictDecision AskBindingConflict(BindingConflict c)
     {
+        var (package, name, targetUId, archiveUId) = (c.Package, c.Name, c.TargetUId, c.ArchiveUId);
         if (Console.IsInputRedirected)
             return new ConflictDecision(ConflictAction.Abort, null);
         while (true)
