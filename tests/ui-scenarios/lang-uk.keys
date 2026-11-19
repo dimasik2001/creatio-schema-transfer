@@ -1,0 +1,29 @@
+# Switches the UI to Ukrainian, walks the main menu, the stand choice, "What to export?" and the selection browser,
+# then switches back to English (the language is remembered in cst.ui-state.json).
+wait:main menu (English)
+Down
+Down
+Down
+Enter                 # Language
+wait:language choice
+Down
+Enter                 # Українська
+wait:main menu in Ukrainian
+Enter                 # Експорт
+Enter                 # dev (the last source comes first)
+wait:what to export
+Enter                 # Вибрати
+wait:selection browser
+Escape                # nothing selected: back to the main menu
+wait:main menu again
+Down
+Down
+Down
+Enter                 # Мова
+Down
+Enter                 # English
+Down
+Down
+Down
+Down
+Enter                 # Quit

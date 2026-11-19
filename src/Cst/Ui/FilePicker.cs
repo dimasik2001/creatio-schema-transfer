@@ -1,4 +1,5 @@
 using Spectre.Console;
+using static Cst.Ui.L;
 
 namespace Cst.Ui;
 
@@ -12,22 +13,22 @@ public static class FilePicker
     {
         const string typed = "\u0000typed", back = "\u0000back";
         var files = Candidates(state, baseDir, archives, lists);
-        var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
+        var choice = AnsiConsole.Prompt(Select<string>()
             .Title(title)
             .PageSize(15)
             .UseConverter(c => c switch
             {
-                typed => "[grey]Type a path…[/]",
-                back => "[grey]← Back[/]",
+                typed => $"[grey]{Markup.Escape(T("Type a path…"))}[/]",
+                back => $"[grey]{Markup.Escape(T("← Back"))}[/]",
                 _ => Describe(c)
             })
             .AddChoices(files.Append(typed).Append(back)));
         if (choice == back) return null;
         if (choice == typed)
         {
-            var what = archives && lists ? "Archive (.zip) or list (.txt)" : archives ? "Archive (.zip)" : "List (.txt)";
-            choice = AnsiConsole.Prompt(new TextPrompt<string>($"{what}:").Validate(p =>
-                File.Exists(p.Trim().Trim('"')) ? ValidationResult.Success() : ValidationResult.Error("No such file."))).Trim().Trim('"');
+            var what = archives && lists ? T("Archive (.zip) or list (.txt)") : archives ? T("Archive (.zip)") : T("List (.txt)");
+            choice = AnsiConsole.Prompt(L.Text(Markup.Escape($"{what}:")).Validate(p =>
+                File.Exists(p.Trim().Trim('"')) ? ValidationResult.Success() : ValidationResult.Error(Markup.Escape(T("No such file."))))).Trim().Trim('"');
         }
         return Path.GetFullPath(choice);
     }
@@ -55,7 +56,9 @@ public static class FilePicker
 
     private static string Describe(string path)
     {
-        var kind = path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ? "list   " : "archive";
+        var kinds = new[] { T("list"), T("archive") };
+        int pad = kinds.Max(k => k.Length);
+        var kind = (path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ? kinds[0] : kinds[1]).PadRight(pad);
         string when = "";
         try { when = File.GetLastWriteTime(path).ToString("yyyy-MM-dd HH:mm"); } catch (IOException) { }
         return Markup.Escape(UiApp.Fit($"{kind}  {when}  {Path.GetFileName(path)}  ({Path.GetDirectoryName(path)})", 6));

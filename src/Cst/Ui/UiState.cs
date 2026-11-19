@@ -15,6 +15,8 @@ public sealed class UiState
     public Dictionary<string, Dictionary<string, string>> Mappings { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public string? LastSource { get; set; }
     public string? LastTarget { get; set; }
+    /// <summary>UI language: "en" (default) or "uk".</summary>
+    public string? Language { get; set; }
     public List<string> RecentLists { get; set; } = [];
     public List<string> RecentArchives { get; set; } = [];
     public List<string> RecentWorkDirs { get; set; } = [];
@@ -44,7 +46,7 @@ public sealed class UiState
         }
         catch (Exception ex)
         {
-            warning = $"{FileName} could not be read ({ex.Message}); starting without remembered choices.";
+            warning = L.F("{0} could not be read ({1}); starting without remembered choices.", FileName, ex.Message);
             return new UiState();
         }
     }
@@ -57,7 +59,7 @@ public sealed class UiState
             File.WriteAllText(path, JsonSerializer.Serialize(this, Json));
             return null;
         }
-        catch (Exception ex) { return $"{FileName} could not be saved: {ex.Message}"; }
+        catch (Exception ex) { return L.F("{0} could not be saved: {1}", FileName, ex.Message); }
     }
 
     public static void Remember(List<string> list, string item)

@@ -4,6 +4,7 @@ using Cst.Creatio;
 using Cst.Packaging;
 using Cst.Transfer;
 using Spectre.Console;
+using static Cst.Ui.L;
 
 namespace Cst.Ui;
 
@@ -36,7 +37,6 @@ public sealed class SummaryScreen(
     private readonly Dictionary<string, PackageContent> _packageCache = new(StringComparer.OrdinalIgnoreCase);
 
     private const string CheckRefs = "check", AddRefs = "add", Mapping = "map", Save = "save", Export = "export", Import = "import", Back = "back", Menu = "menu";
-    private const int NameColumn = 18;
 
     public async Task<SummaryResult> RunAsync()
     {
@@ -49,20 +49,21 @@ public sealed class SummaryScreen(
             if (_refsState == RefsState.Checked && _refs is { Count: > 0 }) choices.Add(AddRefs);
             if (elements.Count > 0) choices.Add(Mapping);
             choices.AddRange([Save, Export, Import, Back, Menu]);
-            var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                .Title("What next?")
+            int nameColumn = UiApp.NameColumn(T("Check references"), T("Add…"), T("Mapping…"), T("Save"), T("Export"), T("Import"), T("Back"), T("Menu"));
+            var choice = AnsiConsole.Prompt(Select<string>()
+                .Title(T("What next?"))
                 .PageSize(10)
                 .UseConverter(c => c switch
                 {
-                    CheckRefs => UiApp.MenuLine("Check references", _refsState == RefsState.Checked
-                        ? "check again" : "find elements the selection needs but does not contain", NameColumn),
-                    AddRefs => UiApp.MenuLine("Add…", $"add the referenced elements ({_refs!.Count})", NameColumn),
-                    Mapping => UiApp.MenuLine("Mapping…", _target == null ? "choose the target stand and map packages" : $"map packages to {_target.Name}", NameColumn),
-                    Save => UiApp.MenuLine("Save", "save the list to a file", NameColumn),
-                    Export => UiApp.MenuLine("Export", "write the transfer archive", NameColumn),
-                    Import => UiApp.MenuLine("Import", _target == null ? "export, then import into a stand" : $"export, then import into {_target.Name}", NameColumn),
-                    Back => UiApp.MenuLine("Back", "change the selection", NameColumn),
-                    _ => UiApp.MenuLine("Menu", "back to the main menu", NameColumn)
+                    CheckRefs => UiApp.MenuLine(T("Check references"), _refsState == RefsState.Checked
+                        ? T("check again") : T("find elements the selection needs but does not contain"), nameColumn),
+                    AddRefs => UiApp.MenuLine(T("Add…"), F("add the referenced elements ({0})", _refs!.Count), nameColumn),
+                    Mapping => UiApp.MenuLine(T("Mapping…"), _target == null ? T("choose the target stand and map packages") : F("map packages to {0}", _target.Name), nameColumn),
+                    Save => UiApp.MenuLine(T("Save"), T("save the list to a file"), nameColumn),
+                    Export => UiApp.MenuLine(T("Export"), T("write the transfer archive"), nameColumn),
+                    Import => UiApp.MenuLine(T("Import"), _target == null ? T("export, then import into a stand") : F("export, then import into {0}", _target.Name), nameColumn),
+                    Back => UiApp.MenuLine(T("Back"), T("change the selection"), nameColumn),
+                    _ => UiApp.MenuLine(T("Menu"), T("back to the main menu"), nameColumn)
                 })
                 .AddChoices(choices));
             try
@@ -77,7 +78,7 @@ public sealed class SummaryScreen(
                     case Import: await ImportAsync(); break;
                     case Back: return SummaryResult.BackToSelection;
                     default:
-                        if (_kept || AnsiConsole.Confirm("Leave without saving the list or exporting it?", false)) return SummaryResult.MainMenu;
+                        if (_kept || UiInput.Confirm(T("Leave without saving the list or exporting it?"), false)) return SummaryResult.MainMenu;
                         break;
                 }
             }
@@ -110,9 +111,9 @@ public sealed class SummaryScreen(
     /// <summary>Warning line while references are not known for the current selection; null when checked.</summary>
     private string? RefsWarning => _refsState switch
     {
-        RefsState.NotChecked => "References are not checked: the target may lack an element the selection needs (run Check references).",
-        RefsState.SelectionChanged => "The selection changed after the reference check: run Check references again.",
-        _ => _refsError != null ? $"The reference check failed: {_refsError}" : null
+        RefsState.NotChecked => T("References are not checked: the target may lack an element the selection needs (run Check references)."),
+        RefsState.SelectionChanged => T("The selection changed after the reference check: run Check references again."),
+        _ => _refsError != null ? F("The reference check failed: {0}", _refsError) : null
     };
 
     /// <summary>Repeats the reference warning (or the found references) after Save / Export, where it matters.</summary>
@@ -120,7 +121,7 @@ public sealed class SummaryScreen(
     {
         if (RefsWarning is { } w) AnsiConsole.MarkupLine($"  [yellow]⚠ {Markup.Escape(w)}[/]");
         else if (_refs is { Count: > 0 })
-            AnsiConsole.MarkupLine($"  [yellow]⚠ {_refs.Count} referenced element(s) are not in the list; they must already exist on the target.[/]");
+            AnsiConsole.MarkupLine($"  [yellow]⚠ {Markup.Escape(F("Referenced elements not in the list: {0}; they must already exist on the target.", _refs.Count))}[/]");
     }
 
     // ---------- the list ----------
@@ -156,7 +157,7 @@ public sealed class SummaryScreen(
             int n = 0;
             try { foreach (var _ in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories)) if (++n >= 20000) break; }
             catch (Exception ex) when (ex is UnauthorizedAccessException or IOException) { }
-            notes[e] = n >= 20000 ? "folder, 20000+ files now" : $"folder, {n} file(s) now";
+            notes[e] = n >= 20000 ? T("folder, 20000+ files now") : F("folder, files now: {0}", n);
         }
         return notes;
     }
@@ -164,26 +165,26 @@ public sealed class SummaryScreen(
     private void Draw()
     {
         AnsiConsole.Clear();
-        var to = _target == null ? "[grey]target not chosen[/]" : Markup.Escape(_target.Header);
-        AnsiConsole.Write(new Rule($"[bold]Export · summary[/] [grey]·[/] {Markup.Escape(source.Header)} [grey]→[/] {to}").LeftJustified());
+        var to = _target == null ? $"[grey]{Markup.Escape(T("target not chosen"))}[/]" : Markup.Escape(_target.Header);
+        AnsiConsole.Write(new Rule($"[bold]{Markup.Escape(T("Export · summary"))}[/] [grey]·[/] {Markup.Escape(source.Header)} [grey]→[/] {to}").LeftJustified());
 
-        AnsiConsole.Write(new Panel(new Text(ListText().TrimEnd())).Header("List (as it will be saved)").Expand());
+        AnsiConsole.Write(new Panel(new Text(ListText().TrimEnd())).Header(Markup.Escape(T("List (as it will be saved)"))).Expand());
         if (_folderNotes is { Count: > 0 })
             foreach (var (path, note) in _folderNotes) AnsiConsole.MarkupLine($"  [grey]{Markup.Escape(path)}: {Markup.Escape(note)}[/]");
 
         var (elements, whole) = Lists();
         if (elements.Count + whole.Count > 0)
         {
-            var t = new Table().Border(TableBorder.Rounded).Title("Package mapping")
-                .AddColumn("Source").AddColumn("Target").AddColumn("Note");
-            foreach (var w in whole) t.AddRow(Markup.Escape(w), Markup.Escape(w), "[grey]whole package: own name (zip install)[/]");
+            var t = new Table().Border(TableBorder.Rounded).Title(Markup.Escape(T("Package mapping")))
+                .AddColumn(Markup.Escape(T("Source"))).AddColumn(Markup.Escape(T("Target"))).AddColumn(Markup.Escape(T("Note")));
+            foreach (var w in whole) t.AddRow(Markup.Escape(w), Markup.Escape(w), $"[grey]{Markup.Escape(T("whole package: own name (zip install)"))}[/]");
             foreach (var p in elements)
             {
                 string note;
                 if (_targetPackages != null && !_targetPackages.Any(x => x.Name.Equals(p.Target, StringComparison.OrdinalIgnoreCase)))
-                    note = $"[yellow]not found on {Markup.Escape(_target!.Name)}[/]";
-                else if (_remembered.Contains(p.Source)) note = "[grey](remembered)[/]";
-                else note = _target == null ? "[grey]target stand not chosen[/]" : "";
+                    note = $"[yellow]{Markup.Escape(F("not found on {0}", _target!.Name))}[/]";
+                else if (_remembered.Contains(p.Source)) note = $"[grey]({Markup.Escape(T("remembered"))})[/]";
+                else note = _target == null ? $"[grey]{Markup.Escape(T("target stand not chosen"))}[/]" : "";
                 t.AddRow(Markup.Escape(p.Source), Markup.Escape(p.Target), note);
             }
             AnsiConsole.Write(t);
@@ -192,26 +193,26 @@ public sealed class SummaryScreen(
         if (RefsWarning is { } warning) AnsiConsole.MarkupLine($"[yellow]⚠ {Markup.Escape(warning)}[/]");
         else if (_refs is { Count: > 0 })
         {
-            var r = new Table().Border(TableBorder.Rounded).Title("[yellow]Referenced but not selected[/]")
-                .AddColumn("Element").AddColumn("Type").AddColumn("Required by");
+            var r = new Table().Border(TableBorder.Rounded).Title($"[yellow]{Markup.Escape(T("Referenced but not selected"))}[/]")
+                .AddColumn(Markup.Escape(T("Element"))).AddColumn(Markup.Escape(T("Type"))).AddColumn(Markup.Escape(T("Required by")));
             foreach (var e in _refs)
                 r.AddRow(Markup.Escape($"{e.SourcePackage}/{e.Name}"), Markup.Escape(TypeOf(e)), Markup.Escape(string.Join(", ", e.RequiredBy)));
             AnsiConsole.Write(r);
         }
-        else if (_refs != null) AnsiConsole.MarkupLine("[green]Every referenced element of your own packages is selected.[/]");
+        else if (_refs != null) AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Every referenced element of your own packages is selected."))}[/]");
         AnsiConsole.WriteLine();
     }
 
     private static string TypeOf(ExternalDependency e) => ElementFolders.Of(e.Kind, e.Manager) switch
     {
-        ElementFolder.SqlScripts => "SQL script",
-        ElementFolder.DataBindings => "data binding",
-        ElementFolder.Objects => "object",
-        ElementFolder.SourceCode => "source code",
-        ElementFolder.ClientModules => "client module",
-        ElementFolder.UserTasks => "user task",
-        ElementFolder.BusinessProcesses => "business process",
-        ElementFolder.AddOns => "add-on",
+        ElementFolder.SqlScripts => T("SQL script"),
+        ElementFolder.DataBindings => T("data binding"),
+        ElementFolder.Objects => T("object"),
+        ElementFolder.SourceCode => T("source code"),
+        ElementFolder.ClientModules => T("client module"),
+        ElementFolder.UserTasks => T("user task"),
+        ElementFolder.BusinessProcesses => T("business process"),
+        ElementFolder.AddOns => T("add-on"),
         _ => (e.Manager ?? "schema").Replace("SchemaManager", "")
     };
 
@@ -227,7 +228,7 @@ public sealed class SummaryScreen(
         if (lists.Count == 0) { _refs = []; return; }
         try
         {
-            await WithProgressAsync("Checking references of the selection...",
+            await WithProgressAsync(T("Checking references of the selection..."),
                 async () => _refs = await new Exporter(source.Client) { PackageCache = _packageCache }.FindReferencesAsync(lists, own.Contains));
         }
         catch (TransferException ex) { _refs = null; _refsError = string.Join("; ", ex.Errors); }
@@ -236,8 +237,8 @@ public sealed class SummaryScreen(
 
     private async Task AddReferencesAsync()
     {
-        var prompt = new MultiSelectionPrompt<ExternalDependency>()
-            .Title("Add which elements? [grey](Space toggles, Enter adds)[/]")
+        var prompt = Multi<ExternalDependency>()
+            .Title($"{Markup.Escape(T("Add which elements?"))} [grey]({Markup.Escape(T("Space toggles, Enter adds"))})[/]")
             .PageSize(15)
             .NotRequired()
             .UseConverter(e => Markup.Escape(UiApp.Fit($"{e.SourcePackage}/{e.Name}  [{TypeOf(e)}]  ← {string.Join(", ", e.RequiredBy)}", 8)));
@@ -264,7 +265,7 @@ public sealed class SummaryScreen(
     private async Task SetTargetAsync(StandSession t)
     {
         _target = t;
-        await WithProgressAsync($"Loading packages of {t.Name}...", async () => _targetPackages = await new Catalog(t.Client).LoadPackagesAsync());
+        await WithProgressAsync(F("Loading packages of {0}...", t.Name), async () => _targetPackages = await new Catalog(t.Client).LoadPackagesAsync());
         // Remembered mapping for this pair of stands (only where the user has not mapped in this session).
         _remembered.Clear();
         if (state.Mappings.TryGetValue(UiState.MappingKey(source.Name, t.Name), out var saved))
@@ -274,21 +275,21 @@ public sealed class SummaryScreen(
 
     private async Task EditMappingAsync()
     {
-        if (!await EnsureTargetAsync("Map packages for which target stand?")) return;
+        if (!await EnsureTargetAsync(T("Map packages for which target stand?"))) return;
         const string done = "\u0000done", change = "\u0000change";
         while (true)
         {
             var (elements, _) = Lists();
-            var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                .Title($"Map packages to [bold]{Markup.Escape(_target!.Name)}[/]:")
+            var choice = AnsiConsole.Prompt(Select<string>()
+                .Title($"{Markup.Escape(T("Map packages to"))} [bold]{Markup.Escape(_target!.Name)}[/]:")
                 .PageSize(15)
-                .UseConverter(c => c == done ? "[green]Done[/]" : c == change ? "[grey]Change the target stand…[/]"
+                .UseConverter(c => c == done ? $"[green]{Markup.Escape(T("Done"))}[/]" : c == change ? $"[grey]{Markup.Escape(T("Change the target stand…"))}[/]"
                     : Markup.Escape(UiApp.Fit($"{c}  →  {Map(c)}", 8)))
                 .AddChoices(new[] { done }.Concat(elements.Select(p => p.Source)).Append(change)));
             if (choice == done) return;
             if (choice == change)
             {
-                var t = await envs.PickAsync(StandPurpose.Target, "Map packages for which target stand?", exclude: source.Name);
+                var t = await envs.PickAsync(StandPurpose.Target, T("Map packages for which target stand?"), exclude: source.Name);
                 if (t != null) { _mapping.Clear(); await SetTargetAsync(t); }
                 continue;
             }
@@ -306,15 +307,16 @@ public sealed class SummaryScreen(
     {
         const string same = "\u0000same", typed = "\u0000typed", back = "\u0000back";
         var names = (_targetPackages ?? []).OrderBy(p => p.IsOwn ? 0 : 1).ThenBy(p => p.Name, StringComparer.OrdinalIgnoreCase).Select(p => p.Name);
-        var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-            .Title($"Target package for [bold]{Markup.Escape(sourcePackage)}[/] [grey](type to search)[/]:")
+        var choice = AnsiConsole.Prompt(Select<string>()
+            .Title($"{Markup.Escape(T("Target package for"))} [bold]{Markup.Escape(sourcePackage)}[/] [grey]({Markup.Escape(T("type to search"))})[/]:")
             .PageSize(15)
             .EnableSearch()
+            .SearchPlaceholderText($"[grey]{Markup.Escape(T("(Type to search)"))}[/]")
             .UseConverter(c => c switch
             {
-                same => $"[grey]same name:[/] {Markup.Escape(sourcePackage)}",
-                typed => "[grey]Type a name…[/]",
-                back => "[grey]← Back[/]",
+                same => $"[grey]{Markup.Escape(T("same name:"))}[/] {Markup.Escape(sourcePackage)}",
+                typed => $"[grey]{Markup.Escape(T("Type a name…"))}[/]",
+                back => $"[grey]{Markup.Escape(T("← Back"))}[/]",
                 _ => Markup.Escape(c)
             })
             .AddChoices(new[] { same, typed }.Concat(names).Append(back)));
@@ -322,8 +324,8 @@ public sealed class SummaryScreen(
         {
             back => null,
             same => sourcePackage,
-            typed => AnsiConsole.Prompt(new TextPrompt<string>("Package name:").Validate(n =>
-                System.Text.RegularExpressions.Regex.IsMatch(n, @"^[\w.]+$") ? ValidationResult.Success() : ValidationResult.Error("Letters, digits, '_' and '.' only."))),
+            typed => AnsiConsole.Prompt(L.Text(Markup.Escape(T("Package name:"))).Validate(n =>
+                System.Text.RegularExpressions.Regex.IsMatch(n, @"^[\w.]+$") ? ValidationResult.Success() : ValidationResult.Error(Markup.Escape(T("Letters, digits, '_' and '.' only."))))),
             _ => choice
         };
     }
@@ -334,16 +336,16 @@ public sealed class SummaryScreen(
         Path.Combine(baseDir, folder, $"{source.Name}-{DateTime.Now:yyyyMMdd-HHmm}{ext}");
 
     private static string AskPath(string question, string def) =>
-        AnsiConsole.Prompt(new TextPrompt<string>(question).DefaultValue(def).ShowDefaultValue(true)).Trim().Trim('"');
+        AnsiConsole.Prompt(L.Text(Markup.Escape(question)).DefaultValue(def).ShowDefaultValue(true)).Trim().Trim('"');
 
     private void SaveList()
     {
-        var path = AskPath("Save the list as", DefaultPath("lists", ".txt"));
+        var path = AskPath(T("Save the list as"), DefaultPath("lists", ".txt"));
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
         File.WriteAllText(path, ListText());
         UiState.Remember(state.RecentLists, Path.GetFullPath(path));
         _kept = true;
-        AnsiConsole.MarkupLine($"[green]Saved:[/] {Markup.Escape(Path.GetFullPath(path))}");
+        AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Saved:"))}[/] {Markup.Escape(Path.GetFullPath(path))}");
         WarnRefs();
         UiInput.Pause();
     }
@@ -351,26 +353,25 @@ public sealed class SummaryScreen(
     /// <summary>Writes the archive; returns its full path, or null when the export failed (errors shown).</summary>
     private async Task<string?> ExportArchiveAsync(bool pause = true)
     {
-        var path = Path.GetFullPath(AskPath("Write the archive to", DefaultPath("archives", ".zip")));
+        var path = Path.GetFullPath(AskPath(T("Write the archive to"), DefaultPath("archives", ".zip")));
         var (elements, whole) = Lists();
         Manifest? manifest = null;
-        await WithProgressAsync("Exporting...", async () =>
+        await WithProgressAsync(T("Exporting..."), async () =>
             manifest = await new Exporter(source.Client) { PackageCache = _packageCache }.ExportAsync(elements, path, FileEntries(), whole));
         UiState.Remember(state.RecentArchives, path);
         _kept = true;
         var m = manifest!;
-        AnsiConsole.MarkupLine($"[green]Archive written:[/] {Markup.Escape(path)}");
+        AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Archive written:"))}[/] {Markup.Escape(path)}");
         WarnRefs();
-        AnsiConsole.MarkupLine($"  {m.WholePackages.Count} whole package(s), {m.Items.Count} element(s), {m.Files.Count} file(s); "
-            + $"{m.External.Count} required on the target");
-        foreach (var w in m.Warnings) AnsiConsole.MarkupLine($"  [yellow]Warning:[/] {Markup.Escape(w)}");
+        AnsiConsole.MarkupLine("  " + Markup.Escape(F("whole packages: {0}, elements: {1}, files: {2}; required on the target: {3}", m.WholePackages.Count, m.Items.Count, m.Files.Count, m.External.Count)));
+        foreach (var w in m.Warnings) AnsiConsole.MarkupLine($"  [yellow]{Markup.Escape(T("Warning:"))}[/] {Markup.Escape(w)}");
         if (pause) UiInput.Pause();
         return path;
     }
 
     private async Task ImportAsync()
     {
-        if (!await EnsureTargetAsync("Import into which stand?")) return;
+        if (!await EnsureTargetAsync(T("Import into which stand?"))) return;
         var archive = await ExportArchiveAsync(pause: false);
         if (archive == null) return;
         // Same wizard as the main menu, starting at the preview: stand and archive are known.
@@ -380,7 +381,7 @@ public sealed class SummaryScreen(
     /// <summary>Runs work under a spinner that shows the latest progress line of cst.</summary>
     private async Task WithProgressAsync(string title, Func<Task> work)
     {
-        await AnsiConsole.Status().StartAsync(title, async ctx =>
+        await AnsiConsole.Status().StartAsync(Markup.Escape(title), async ctx =>
         {
             void OnInfo(string line) => ctx.Status(Markup.Escape(UiApp.Fit(line, 6)));
             log.InfoWritten += OnInfo;

@@ -73,9 +73,38 @@ public static class UiInput
     }
 
     /// <summary>Waits for any key (used after messages the user must read).</summary>
-    public static void Pause(string text = "Press any key to continue...")
+    public static void Pause(string? text = null)
     {
-        AnsiConsole.MarkupLine($"[grey]{Markup.Escape(text)}[/]");
+        AnsiConsole.MarkupLine($"[grey]{Markup.Escape(text ?? L.T("Press any key to continue..."))}[/]");
         ReadKey();
+    }
+
+    /// <summary>
+    /// A yes/no question answered with Y or N and Enter (Enter alone takes the default). Keys, not characters, are
+    /// read, so the answer works in any keyboard layout (Y is "н" in the Ukrainian one).
+    /// </summary>
+    public static bool Confirm(string question, bool defaultValue)
+    {
+        AnsiConsole.Markup($"{Markup.Escape(question)} [blue]{(defaultValue ? "[[Y/n]]" : "[[y/N]]")}[/] ");
+        bool? answer = null;
+        while (true)
+        {
+            var k = ReadKey();
+            switch (k.Key)
+            {
+                case ConsoleKey.Y or ConsoleKey.N:
+                    if (answer != null) AnsiConsole.Write("\b \b");
+                    answer = k.Key == ConsoleKey.Y;
+                    AnsiConsole.Write(answer.Value ? "y" : "n");
+                    break;
+                case ConsoleKey.Backspace when answer != null:
+                    AnsiConsole.Write("\b \b");
+                    answer = null;
+                    break;
+                case ConsoleKey.Enter:
+                    AnsiConsole.WriteLine();
+                    return answer ?? defaultValue;
+            }
+        }
     }
 }

@@ -1,3 +1,5 @@
+using static Cst.Ui.L;
+
 namespace Cst.Ui;
 
 /// <summary>
@@ -78,7 +80,7 @@ public sealed class FileSource : IBrowserSource
     }
 
     public FileSelection Selection { get; }
-    public string TabTitle => "Files";
+    public string TabTitle => T("Files");
     public string? KeyHint => null;
     public IReadOnlyList<string> Path => _dir.Length == 0 ? [] : _dir.Split('\\');
     public bool CanGoUp => _dir.Length > 0;
@@ -104,7 +106,7 @@ public sealed class FileSource : IBrowserSource
     public Task<IReadOnlyList<BrowserItem>> ItemsAsync()
     {
         if (!Directory.Exists(_root))
-            throw new DirectoryNotFoundException($"The stand's Path does not exist on this machine: {_root}");
+            throw new DirectoryNotFoundException(F("The stand's Path does not exist on this machine: {0}", _root));
         IReadOnlyList<BrowserItem> items = Children(_dir).Select(c =>
         {
             var rel = FileSelection.Join(_dir, c.Name);
@@ -142,8 +144,7 @@ public sealed class FileSource : IBrowserSource
     public string? SelectionSummary => Selection.Roots.Count switch
     {
         0 => null,
-        1 => "1 file entry",
-        var n => $"{n} file entries"
+        var n => F("file entries: {0}", n)
     };
 
     private static string FormatSize(long bytes) => bytes switch

@@ -1,3 +1,5 @@
+using static Cst.Ui.L;
+
 namespace Cst.Ui;
 
 public enum Mark { None, Partial, All }
@@ -61,16 +63,16 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
             while (true)
             {
                 var source = tabs[_tab];
-                if (source.NeedsLoad()) { _status = "Loading..."; Draw(source, []); }
+                if (source.NeedsLoad()) { _status = T("Loading..."); Draw(source, []); }
                 IReadOnlyList<BrowserItem> all;
                 try { all = await source.ItemsAsync(); }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
                 {
-                    _status = "Cannot load: " + ex.Message;
+                    _status = T("Cannot load:") + " " + ex.Message;
                     all = [];
                     if (source.CanGoUp) { _restoreId = source.Up(); Draw(source, all); WaitKey(); continue; }
                 }
-                if (_status == "Loading...") _status = null;
+                if (_status == T("Loading...")) _status = null;
                 var items = Filter(all);
                 if (_restoreId != null)
                 {
@@ -111,13 +113,13 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
                     case ConsoleKey.F2:
                     case ConsoleKey.S when ctrl:
                         if (tabs.Any(t => t.HasSelection)) return BrowserResult.Done;
-                        _status = "Nothing is selected yet (Space marks an item)."; break;
+                        _status = T("Nothing is selected yet (Space marks an item)."); break;
                     case ConsoleKey.Escape when _filter.Length > 0:
                         _filter = ""; _cursor = 0; break;
                     case ConsoleKey.Escape when source.CanGoUp:
                         _restoreId = source.Up(); ResetLevel(); break;
                     case ConsoleKey.Escape:
-                        if (!tabs.Any(t => t.HasSelection) || Confirm(source, items, "Discard the selection and go back? [y/N]")) return BrowserResult.Back;
+                        if (!tabs.Any(t => t.HasSelection) || Confirm(source, items, T("Discard the selection and go back? [y/N]"))) return BrowserResult.Back;
                         break;
                     default:
                         if (ctrl || (key.Modifiers & ConsoleModifiers.Alt) != 0)
@@ -146,9 +148,9 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
 
     private async Task ToggleAsync(IBrowserSource source, BrowserItem item, IReadOnlyList<BrowserItem> items)
     {
-        if (source.NeedsLoad(item)) { _status = $"Loading {item.Label}..."; Draw(source, items); }
+        if (source.NeedsLoad(item)) { _status = F("Loading {0}...", item.Label); Draw(source, items); }
         try { await source.ToggleAsync(item); _status = null; }
-        catch (Exception ex) when (ex is not OutOfMemoryException) { _status = $"Cannot mark {item.Label}: {ex.Message}"; }
+        catch (Exception ex) when (ex is not OutOfMemoryException) { _status = F("Cannot mark {0}: {1}", item.Label, ex.Message); }
     }
 
     private bool Confirm(IBrowserSource source, IReadOnlyList<BrowserItem> items, string question)
@@ -177,7 +179,7 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
         lines.Add(head);
         // Breadcrumbs and filter.
         var crumbs = new List<Seg> { new(string.Join(" / ", new[] { standHeader.Split(' ')[0] }.Concat(source.Path)), "bold") };
-        if (_filter.Length > 0) crumbs.Add(new Seg($"   filter: {_filter}", "yellow"));
+        if (_filter.Length > 0) crumbs.Add(new Seg("   " + F("filter: {0}", _filter), "yellow"));
         lines.Add(crumbs);
         lines.Add([new Seg(new string('─', Math.Max(0, _screen.Width)), "grey")]);
 
@@ -186,7 +188,7 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
         if (_cursor >= _top + rows) _top = _cursor - rows + 1;
         _top = Math.Max(0, Math.Min(_top, Math.Max(0, items.Count - rows)));
         if (items.Count == 0)
-            lines.Add([new Seg(_filter.Length > 0 ? "  (nothing matches the filter)" : "  (empty)", "grey")]);
+            lines.Add([new Seg("  " + (_filter.Length > 0 ? T("(nothing matches the filter)") : T("(empty)")), "grey")]);
         for (int i = _top; i < Math.Min(items.Count, _top + rows); i++)
         {
             var it = items[i];
@@ -214,7 +216,7 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
         var info = new List<Seg>
         {
             new(items.Count == 0 ? "" : $"{_cursor + 1}/{items.Count}   ", "grey"),
-            new("Selected: " + (selection.Length == 0 ? "nothing" : selection), selection.Length == 0 ? "grey" : "green")
+            new(T("Selected:") + " " + (selection.Length == 0 ? T("nothing") : selection), selection.Length == 0 ? "grey" : "green")
         };
         lines.Add([new Seg(new string('─', Math.Max(0, _screen.Width)), "grey")]);
         lines.Add(info);
@@ -235,9 +237,9 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
         // (text, priority: lower = more important)
         var hints = new List<(string Text, int Priority)>
         {
-            ("↑↓ move", 7), ("Enter/→ open", 2), ("←/Bksp up", 5), ("Space mark", 1), ("type to filter", 6), ("Esc back", 3), ("F2 done", 0)
+            (T("↑↓ move"), 7), (T("Enter/→ open"), 2), (T("←/Bksp up"), 5), (T("Space mark"), 1), (T("type to filter"), 6), (T("Esc back"), 3), (T("F2 done"), 0)
         };
-        if (tabs.Count > 1) hints.Add(("Tab switch", 4));
+        if (tabs.Count > 1) hints.Add((T("Tab switch"), 4));
         if (source.KeyHint != null) hints.Add((source.KeyHint, 4));
         int width = _screen.Width;
         var shown = hints.ToList();

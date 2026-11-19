@@ -2,6 +2,7 @@ using System.Net.Http;
 using Cst.Config;
 using Cst.Creatio;
 using Spectre.Console;
+using static Cst.Ui.L;
 
 namespace Cst.Ui;
 
@@ -12,7 +13,7 @@ public sealed class StandSession(string name, EnvironmentSettings settings, Crea
     public EnvironmentSettings Settings { get; } = settings;
     public CreatioClient Client { get; } = client;
     public string CoreVersion { get; } = coreVersion;
-    public string DbEngine => string.IsNullOrWhiteSpace(Settings.DbEngine) ? "DbEngine not set" : Settings.DbEngine!;
+    public string DbEngine => string.IsNullOrWhiteSpace(Settings.DbEngine) ? T("DbEngine not set") : Settings.DbEngine!;
     public bool HasPath => !string.IsNullOrWhiteSpace(Settings.Path);
 
     /// <summary>Header text: "dev · 10.0.0.801 · MSSql".</summary>
@@ -38,7 +39,7 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
     {
         if (settings.Environments.Count == 0)
         {
-            AnsiConsole.MarkupLine("[red]No environments in appsettings.json.[/] Add one under \"Environments\" (see appsettings.example.json).");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("No environments in appsettings.json."))}[/] {Markup.Escape(T("Add one under \"Environments\" (see appsettings.example.json)."))}");
             UiInput.Pause();
             return null;
         }
@@ -50,17 +51,17 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
         const string back = "\u0000back";
         while (true)
         {
-            var prompt = new SelectionPrompt<string>()
+            var prompt = Select<string>()
                 .Title(title)
                 .PageSize(15)
-                .UseConverter(n => n == back ? "[grey]← Back[/]" : Describe(n, purpose))
+                .UseConverter(n => n == back ? $"[grey]{Markup.Escape(T("← Back"))}[/]" : Describe(n, purpose))
                 .AddChoices(names.Append(back));
             var name = AnsiConsole.Prompt(prompt);
             if (name == back) return null;
 
             if (purpose == StandPurpose.Target && !HasDbEngine(settings.Environments[name], out var why))
             {
-                AnsiConsole.MarkupLine($"[red]{Markup.Escape(name)} cannot be an import target:[/] {Markup.Escape(why)}");
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(F("{0} cannot be an import target:", name))}[/] {Markup.Escape(why)}");
                 continue;
             }
             var session = await ConnectAsync(name);
@@ -73,11 +74,11 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
     private string Describe(string name, StandPurpose purpose)
     {
         var e = settings.Environments[name];
-        var db = HasDbEngine(e, out _) ? e.DbEngine! : "[red]no DbEngine[/]";
-        var path = string.IsNullOrWhiteSpace(e.Path) ? "" : " · [green]files[/]";
+        var db = HasDbEngine(e, out _) ? e.DbEngine! : $"[red]{Markup.Escape(T("no DbEngine"))}[/]";
+        var path = string.IsNullOrWhiteSpace(e.Path) ? "" : $" · [green]{Markup.Escape(T("files"))}[/]";
         var connected = _sessions.ContainsKey(name) ? " [green]●[/]" : "";
         var line = $"[bold]{Markup.Escape(name)}[/]{connected}  [grey]{Markup.Escape(e.Url)}[/] · {db}{path}";
-        if (purpose == StandPurpose.Target && !HasDbEngine(e, out _)) line = $"[grey]{Markup.Escape(Markup.Remove(line))}[/] [red](no DbEngine)[/]";
+        if (purpose == StandPurpose.Target && !HasDbEngine(e, out _)) line = $"[grey]{Markup.Escape(Markup.Remove(line))}[/] [red]({Markup.Escape(T("no DbEngine"))})[/]";
         // A wrapped choice breaks the prompt's redraw: fall back to plain text cut to the window width.
         var plain = Markup.Remove(line);
         return plain.Length > UiApp.Fit(plain).Length ? Markup.Escape(UiApp.Fit(plain)) : line;
@@ -99,7 +100,7 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
         {
             env = settings.Resolve(name, null, null, null, askPassword: n =>
             {
-                var p = UiInput.ReadSecret($"Password for [bold]{Markup.Escape(n ?? "?")}[/] [grey](Esc: back)[/]: ");
+                var p = UiInput.ReadSecret($"{Markup.Escape(T("Password for"))} [bold]{Markup.Escape(n ?? "?")}[/] [grey]({Markup.Escape(T("Esc: back"))})[/]: ");
                 cancelled = p == null;
                 return p;
             });
@@ -118,14 +119,14 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
             try
             {
                 string core = "";
-                await AnsiConsole.Status().StartAsync($"Connecting to {Markup.Escape(env.Url)} as {Markup.Escape(env.Login)}...", async _ =>
+                await AnsiConsole.Status().StartAsync(Markup.Escape(F("Connecting to {0} as {1}...", env.Url, env.Login)), async _ =>
                 {
                     await client.LoginAsync();
                     core = (await client.GetAppInfoAsync()).CoreVersion;
                 });
                 var session = new StandSession(name, env, client, core);
                 _sessions[name] = session;
-                AnsiConsole.MarkupLine($"[green]Connected:[/] {Markup.Escape(session.Header)}");
+                AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Connected:"))}[/] {Markup.Escape(session.Header)}");
                 return session;
             }
             catch (LoginException ex) when (ex.Reason == LoginFailure.InvalidCredentials)
@@ -134,15 +135,15 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
                 failures++;
                 AnsiConsole.MarkupLine($"[red]{Markup.Escape(ex.Message)}[/]");
                 if (failures >= 2)
-                    AnsiConsole.MarkupLine("[yellow]Creatio may lock the user after several failed logins.[/]");
-                var p = UiInput.ReadSecret($"Password for [bold]{Markup.Escape(env.Login)}[/] on [bold]{Markup.Escape(name)}[/] [grey](Esc: back)[/]: ");
+                    AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(T("Creatio may lock the user after several failed logins."))}[/]");
+                var p = UiInput.ReadSecret($"{Markup.Escape(T("Password for"))} [bold]{Markup.Escape(env.Login)}[/] {Markup.Escape(T("on"))} [bold]{Markup.Escape(name)}[/] [grey]({Markup.Escape(T("Esc: back"))})[/]: ");
                 if (p == null) return null;
                 env.Password = p;
             }
             catch (LoginException ex) when (ex.Reason is LoginFailure.Locked or LoginFailure.PasswordExpired)
             {
                 client.Dispose();
-                var what = ex.Reason == LoginFailure.Locked ? "The user is locked on this stand." : "The password has expired; change it in Creatio first.";
+                var what = ex.Reason == LoginFailure.Locked ? T("The user is locked on this stand.") : T("The password has expired; change it in Creatio first.");
                 AnsiConsole.MarkupLine($"[red]{Markup.Escape(what)}[/] [grey]{Markup.Escape(ex.Message)}[/]");
                 UiInput.Pause();
                 return null;
@@ -150,9 +151,10 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
             catch (Exception ex) when (ex is CreatioException or HttpRequestException or TaskCanceledException or UriFormatException)
             {
                 client.Dispose();
-                AnsiConsole.MarkupLine($"[red]Cannot connect to {Markup.Escape(name)}:[/] {Markup.Escape(ex.Message)}");
-                var again = AnsiConsole.Prompt(new SelectionPrompt<string>().AddChoices("Retry", "Back"));
-                if (again == "Back") return null;
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(F("Cannot connect to {0}:", name))}[/] {Markup.Escape(ex.Message)}");
+                const string retry = "retry", goBack = "back";
+                var again = AnsiConsole.Prompt(Select<string>().UseConverter(c => Markup.Escape(c == retry ? T("Retry") : T("Back"))).AddChoices(retry, goBack));
+                if (again == goBack) return null;
             }
         }
     }

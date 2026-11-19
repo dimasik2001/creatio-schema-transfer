@@ -2,6 +2,8 @@ using Cst.Config;
 using Cst.Creatio;
 using Cst.Packaging;
 
+using static Cst.Ui.L;
+
 namespace Cst.Ui;
 
 /// <summary>
@@ -17,8 +19,8 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
     private string? _package;
     private ElementFolder? _folder;
 
-    public string TabTitle => "Packages";
-    public string? KeyHint => _package == null ? (_showAll ? "Ctrl+A own packages" : "Ctrl+A all packages") : null;
+    public string TabTitle => T("Packages");
+    public string? KeyHint => _package == null ? (_showAll ? T("Ctrl+A own packages") : T("Ctrl+A all packages")) : null;
 
     public IReadOnlyList<string> Path
     {
@@ -26,7 +28,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         {
             var p = new List<string>();
             if (_package != null) p.Add(_package);
-            if (_folder is { } f) p.Add(ElementFolders.Title(f));
+            if (_folder is { } f) p.Add(T(ElementFolders.Title(f)));
             return p;
         }
     }
@@ -68,10 +70,10 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
                 {
                     int sel = _selected.TryGetValue(p.Name, out var s) ? s.Count : 0;
                     var mark = _elements.TryGetValue(p.Name, out var els) ? MarkOf(sel, els.Count) : sel > 0 ? Mark.Partial : Mark.None;
-                    var detail = (mark == Mark.All && !_elementsOnly.Contains(p.Name) ? "whole package (zip install) · "
-                                     : mark == Mark.All ? "all elements, one by one (from the list) · "
-                                     : sel > 0 ? $"{sel} selected · " : "")
-                                 + (p.IsOwn ? "" : "base · ") + p.Maintainer;
+                    var detail = (mark == Mark.All && !_elementsOnly.Contains(p.Name) ? T("whole package (zip install)") + " · "
+                                     : mark == Mark.All ? T("all elements, one by one (from the list)") + " · "
+                                     : sel > 0 ? F("selected: {0}", sel) + " · " : "")
+                                 + (p.IsOwn ? "" : T("base") + " · ") + p.Maintainer;
                     return new BrowserItem { Id = p.Name, Label = p.Name, IsContainer = true, Mark = mark, Detail = detail };
                 }).ToList();
         }
@@ -84,7 +86,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
                 int sel = g.Count(e => selected.Contains((e.Kind, e.UId)));
                 return new BrowserItem
                 {
-                    Id = g.Key.ToString(), Label = ElementFolders.Title(g.Key), IsContainer = true,
+                    Id = g.Key.ToString(), Label = T(ElementFolders.Title(g.Key)), IsContainer = true,
                     Mark = MarkOf(sel, g.Count()), Detail = sel > 0 ? $"({sel}/{g.Count()})" : $"({g.Count()})"
                 };
             }).ToList();
@@ -137,7 +139,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
     {
         if (_package != null || key.Key != ConsoleKey.A || (key.Modifiers & ConsoleModifiers.Control) == 0) return null;
         _showAll = !_showAll;
-        return _showAll ? $"Showing all {packages.Count} packages." : $"Showing own packages ({packages.Count(p => p.IsOwn)}).";
+        return _showAll ? F("Showing all packages ({0}).", packages.Count) : F("Showing own packages ({0}).", packages.Count(p => p.IsOwn));
     }
 
     public bool HasSelection => _selected.Values.Any(s => s.Count > 0);
@@ -147,7 +149,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         get
         {
             int n = _selected.Values.Sum(s => s.Count);
-            return n == 0 ? null : n == 1 ? "1 element" : $"{n} elements";
+            return n == 0 ? null : F("elements: {0}", n);
         }
     }
 
@@ -178,14 +180,14 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         foreach (var section in elementSections)
         {
             var pkg = packages.FirstOrDefault(p => p.Name.Equals(section.Source, StringComparison.OrdinalIgnoreCase));
-            if (pkg == null) { problems.Add($"package {section.Source} does not exist on this stand"); continue; }
+            if (pkg == null) { problems.Add(F("package {0} does not exist on this stand", section.Source)); continue; }
             var all = await ElementsAsync(pkg.Name);
             var set = Selected(pkg.Name);
             foreach (var entry in section.Entries)
             {
                 var found = all.Where(e => e.Name.Equals(entry.Name, StringComparison.OrdinalIgnoreCase) && (entry.Kind == null || e.Kind == entry.Kind)).ToList();
-                if (found.Count == 0) problems.Add($"{pkg.Name}: '{entry.Name}'{(entry.Kind is { } k ? $" [{k}]" : "")} not found");
-                else if (found.Count > 1) problems.Add($"{pkg.Name}: '{entry.Name}' is ambiguous ({string.Join(", ", found.Select(f => f.Kind))}); add a type hint like [data] to the list");
+                if (found.Count == 0) problems.Add(F("{0}: '{1}'{2} not found", pkg.Name, entry.Name, entry.Kind is { } k ? $" [{k}]" : ""));
+                else if (found.Count > 1) problems.Add(F("{0}: '{1}' is ambiguous ({2}); add a type hint like [data] to the list", pkg.Name, entry.Name, string.Join(", ", found.Select(f => f.Kind))));
                 else set.Add((found[0].Kind, found[0].UId));
             }
             if (set.Count > 0) _elementsOnly.Add(pkg.Name);
@@ -193,7 +195,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         foreach (var name in wholePackages)
         {
             var pkg = packages.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
-            if (pkg == null) { problems.Add($"package {name} (packages: section) does not exist on this stand"); continue; }
+            if (pkg == null) { problems.Add(F("package {0} (packages: section) does not exist on this stand", name)); continue; }
             var set = Selected(pkg.Name);
             foreach (var e in await ElementsAsync(pkg.Name)) set.Add((e.Kind, e.UId));
             _elementsOnly.Remove(pkg.Name);

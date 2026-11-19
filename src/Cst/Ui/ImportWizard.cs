@@ -5,6 +5,7 @@ using Cst.Packaging;
 using Cst.Transfer;
 using Spectre.Console;
 using Spectre.Console.Rendering;
+using static Cst.Ui.L;
 
 namespace Cst.Ui;
 
@@ -16,7 +17,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
 {
     public async Task RunAsync(StandSession? target = null, string? archive = null)
     {
-        target ??= await envs.PickAsync(StandPurpose.Target, "Import into which stand?");
+        target ??= await envs.PickAsync(StandPurpose.Target, T("Import into which stand?"));
         if (target == null) return;
         while (true)
         {
@@ -33,7 +34,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
     private void Header(StandSession target, string step)
     {
         AnsiConsole.Clear();
-        AnsiConsole.Write(new Rule($"[bold]Import · {Markup.Escape(step)}[/] [grey]→[/] {Markup.Escape(target.Header)}").LeftJustified());
+        AnsiConsole.Write(new Rule($"[bold]{Markup.Escape(T("Import"))} · {Markup.Escape(T(step))}[/] [grey]→[/] {Markup.Escape(target.Header)}").LeftJustified());
     }
 
     // ---------- 2. archive ----------
@@ -41,7 +42,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
     private async Task<string?> PickArchiveAsync(StandSession target)
     {
         Header(target, "archive");
-        var choice = FilePicker.Pick("Which archive (or list) to import?", state, baseDir, archives: true, lists: true);
+        var choice = FilePicker.Pick(T("Which archive (or list) to import?"), state, baseDir, archives: true, lists: true);
         if (choice == null) return null;
         if (choice.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return await ExportListAsync(target, choice);
         return choice;
@@ -50,7 +51,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
     /// <summary>A list file is exported first (asks the source stand), then imported.</summary>
     private async Task<string?> ExportListAsync(StandSession target, string listPath)
     {
-        var source = await envs.PickAsync(StandPurpose.Source, $"Export {Path.GetFileName(listPath)} from which stand?", exclude: target.Name);
+        var source = await envs.PickAsync(StandPurpose.Source, F("Export {0} from which stand?", Path.GetFileName(listPath)), exclude: target.Name);
         if (source == null) return null;
         var list = SchemaList.ParseFile(listPath);
         var files = SchemaList.ParseFilesSection(listPath);
@@ -58,7 +59,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         var archive = Path.Combine(baseDir, "archives", $"{source.Name}-{DateTime.Now:yyyyMMdd-HHmm}.zip");
         try
         {
-            await Progress.RunAsync(log, "Exporting the list...", () => new Exporter(source.Client).ExportAsync(list, archive, files, whole));
+            await Progress.RunAsync(log, T("Exporting the list..."), () => new Exporter(source.Client).ExportAsync(list, archive, files, whole));
         }
         catch (TransferException ex)
         {
@@ -68,7 +69,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         }
         UiState.Remember(state.RecentLists, listPath);
         UiState.Remember(state.RecentArchives, archive);
-        AnsiConsole.MarkupLine($"[green]Exported:[/] {Markup.Escape(archive)}");
+        AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Exported:"))}[/] {Markup.Escape(archive)}");
         return archive;
     }
 
@@ -81,15 +82,15 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         try { (manifest, _) = TransferArchive.Read(archive); }
         catch (Exception ex) when (ex is InvalidDataException or IOException or System.Text.Json.JsonException)
         {
-            AnsiConsole.MarkupLine($"[red]Cannot read {Markup.Escape(archive)}:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(F("Cannot read {0}:", archive))}[/] {Markup.Escape(ex.Message)}");
             UiInput.Pause();
             return Next.OtherArchive;
         }
         Header(target, "preview");
         bool blocked = Preview(manifest, target);
         const string go = "go", other = "other", cancel = "cancel";
-        var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-            .UseConverter(c => c switch { go => "Continue", other => "Choose another archive", _ => "Cancel" })
+        var choice = AnsiConsole.Prompt(Select<string>()
+            .UseConverter(c => Markup.Escape(c switch { go => T("Continue"), other => T("Choose another archive"), _ => T("Cancel") }))
             .AddChoices(blocked ? [other, cancel] : [go, other, cancel]));
         if (choice == other) return Next.OtherArchive;
         if (choice == cancel) return Next.Done;
@@ -105,16 +106,17 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
 
         // 5. Options
         Header(target, "options");
-        var optNoCompile = "No compile [grey](schemas unchanged since the last successful compile)[/]";
-        var optRebuild = "Rebuild [grey](full compilation instead of an incremental one)[/]";
-        var optDesigner = "Data designer [grey](old path for data bindings)[/]";
-        var chosen = AnsiConsole.Prompt(new MultiSelectionPrompt<string>()
-            .Title("Options [grey](Space toggles, Enter continues)[/]")
+        static string Option(string name, string note) => $"{Markup.Escape(T(name))} [grey]({Markup.Escape(T(note))})[/]";
+        var optNoCompile = Option("No compile", "schemas unchanged since the last successful compile");
+        var optRebuild = Option("Rebuild", "full compilation instead of an incremental one");
+        var optDesigner = Option("Data designer", "old path for data bindings");
+        var chosen = AnsiConsole.Prompt(Multi<string>()
+            .Title($"{Markup.Escape(T("Options"))} [grey]({Markup.Escape(T("Space toggles, Enter continues"))})[/]")
             .NotRequired()
             .AddChoices(optNoCompile, optRebuild, optDesigner));
         var defaultWorkDir = Path.Combine(Path.GetDirectoryName(archive)!,
             Path.GetFileNameWithoutExtension(archive) + "_import_" + DateTime.Now.ToString("yyyyMMdd_HHmmss"));
-        var workDir = AnsiConsole.Prompt(new TextPrompt<string>("Work dir (backups, restore.json, log):").DefaultValue(defaultWorkDir)).Trim().Trim('"');
+        var workDir = AnsiConsole.Prompt(L.Text(Markup.Escape(T("Work dir (backups, restore.json, log):"))).DefaultValue(defaultWorkDir)).Trim().Trim('"');
         ImportOptions Options(bool dry) => new()
         {
             DryRun = dry, NoCompile = chosen.Contains(optNoCompile), FullRebuild = chosen.Contains(optRebuild),
@@ -133,30 +135,30 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         void Collect(string line) => plan.Add(line);
         ImportResult dry;
         log.InfoWritten += Collect;
-        try { dry = await Progress.RunAsync(log, "Checking the target (dry run)...", () => new Importer(target.Client).ImportAsync(archive, Options(true))); }
+        try { dry = await Progress.RunAsync(log, T("Checking the target (dry run)..."), () => new Importer(target.Client).ImportAsync(archive, Options(true))); }
         catch (TransferException ex)
         {
             foreach (var e in ex.Errors) AnsiConsole.MarkupLine($"[red]{Markup.Escape(e)}[/]");
-            AnsiConsole.MarkupLine("[red]Nothing was installed.[/]");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("Nothing was installed."))}[/]");
             UiInput.Pause();
             return Next.Done;
         }
         finally { log.InfoWritten -= Collect; }
         if (dry.MissingDependencies.Count > 0)
         {
-            AnsiConsole.MarkupLine($"[red]Missing on {Markup.Escape(target.Name)} ({dry.MissingDependencies.Count}); nothing can be installed:[/]");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(F("Missing on {0} ({1}); nothing can be installed:", target.Name, dry.MissingDependencies.Count))}[/]");
             foreach (var m in dry.MissingDependencies) AnsiConsole.MarkupLine($"  [red]•[/] {Markup.Escape(m.Replace("**", ""))}");
-            if (dry.MissingReportPath != null) AnsiConsole.MarkupLine($"[grey]Report: {Markup.Escape(dry.MissingReportPath)}[/]");
+            if (dry.MissingReportPath != null) AnsiConsole.MarkupLine($"[grey]{Markup.Escape(F("Report: {0}", dry.MissingReportPath))}[/]");
             UiInput.Pause();
             return Next.Done;
         }
         AnsiConsole.Write(new Panel(new Text(string.Join(Environment.NewLine, plan.Where(l => l.StartsWith("  ") || l.StartsWith("Dry run")))))
-            .Header("Plan").Expand());
-        foreach (var n in dry.Notes) AnsiConsole.MarkupLine($"[grey]Note:[/] {Markup.Escape(n)}");
-        foreach (var w in dry.Warnings) AnsiConsole.MarkupLine($"[yellow]Warning:[/] {Markup.Escape(w)}");
+            .Header(Markup.Escape(T("Plan"))).Expand());
+        foreach (var n in dry.Notes) AnsiConsole.MarkupLine($"[grey]{Markup.Escape(T("Note:"))}[/] {Markup.Escape(n)}");
+        foreach (var w in dry.Warnings) AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(T("Warning:"))}[/] {Markup.Escape(w)}");
 
         // 7. Confirm → import
-        if (!AnsiConsole.Confirm($"Install into {target.Header}?", false)) return Next.Done;
+        if (!UiInput.Confirm(F("Install into {0}?", target.Header), false)) return Next.Done;
         Directory.CreateDirectory(workDir);
         UiState.Remember(state.RecentWorkDirs, Path.GetFullPath(workDir));
         log.FilePath = Path.Combine(workDir, "cst-ui.log");
@@ -166,7 +168,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         string? failure = null;
         try
         {
-            result = await Progress.RunStagesAsync(log, $"Importing into {target.Name}", () => new Importer(target.Client).ImportAsync(archive, Options(false)));
+            result = await Progress.RunStagesAsync(log, F("Importing into {0}", target.Name), () => new Importer(target.Client).ImportAsync(archive, Options(false)));
             code = result.MissingDependencies.Count > 0 ? 3 : result.CompileErrors.Count > 0 ? 5 : 0;
         }
         catch (TransferException ex) { code = 2; failure = string.Join(Environment.NewLine, ex.Errors); }
@@ -182,23 +184,23 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
     /// <summary>Shows the archive content; returns true when the import cannot go on (files without a target Path).</summary>
     private static bool Preview(Manifest m, StandSession target)
     {
-        AnsiConsole.MarkupLine($"[grey]From {Markup.Escape(m.SourceUrl)}, created {m.CreatedUtc.ToLocalTime():yyyy-MM-dd HH:mm}[/]");
-        var t = new Table().Border(TableBorder.Rounded).AddColumn("What").AddColumn("Details");
+        AnsiConsole.MarkupLine($"[grey]{Markup.Escape(F("From {0}, created {1:yyyy-MM-dd HH:mm}", m.SourceUrl, m.CreatedUtc.ToLocalTime()))}[/]");
+        var t = new Table().Border(TableBorder.Rounded).AddColumn(Markup.Escape(T("What"))).AddColumn(Markup.Escape(T("Details")));
         foreach (var w in m.WholePackages)
-            t.AddRow("[bold]whole package[/]", Markup.Escape($"{w.Name} {w.Version} — zip installer, installed first ({w.Schemas.Count} schemas)"));
+            t.AddRow($"[bold]{Markup.Escape(T("whole package"))}[/]", Markup.Escape(F("{0} {1} — zip installer, installed first (schemas: {2})", w.Name, w.Version, w.Schemas.Count)));
         foreach (var p in m.Packages)
-            t.AddRow("package", Markup.Escape(p.Source == p.Target ? p.Source : $"{p.Source} → {p.Target}"));
+            t.AddRow(Markup.Escape(T("package")), Markup.Escape(p.Source == p.Target ? p.Source : $"{p.Source} → {p.Target}"));
         foreach (var g in m.Items.GroupBy(i => ElementFolders.Of(i.Kind, i.Manager)).OrderBy(g => g.Key))
-            t.AddRow(Markup.Escape(ElementFolders.Title(g.Key)), Markup.Escape(UiApp.Fit(string.Join(", ", g.Select(i => i.Name)), 30)));
+            t.AddRow(Markup.Escape(T(ElementFolders.Title(g.Key))), Markup.Escape(UiApp.Fit(string.Join(", ", g.Select(i => i.Name)), 30)));
         if (m.Files.Count > 0)
-            t.AddRow("files", Markup.Escape($"{m.Files.Count} file(s), {m.Files.Sum(f => f.Size) / 1024} KB"));
+            t.AddRow(Markup.Escape(T("files")), Markup.Escape(F("files: {0}, {1} KB", m.Files.Count, m.Files.Sum(f => f.Size) / 1024)));
         if (m.External.Count > 0)
-            t.AddRow("required on target", Markup.Escape($"{m.External.Count} element(s) not in the archive"));
+            t.AddRow(Markup.Escape(T("required on target")), Markup.Escape(F("elements not in the archive: {0}", m.External.Count)));
         AnsiConsole.Write(t);
-        foreach (var w in m.Warnings) AnsiConsole.MarkupLine($"[yellow]Warning:[/] {Markup.Escape(w)}");
+        foreach (var w in m.Warnings) AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(T("Warning:"))}[/] {Markup.Escape(w)}");
         if (m.Files.Count > 0 && !target.HasPath)
         {
-            AnsiConsole.MarkupLine($"[red]The archive carries files, but {Markup.Escape(target.Name)} has no \"Path\" (Creatio folder) in appsettings.json: it cannot be imported there.[/]");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(F("The archive carries files, but {0} has no \"Path\" (Creatio folder) in appsettings.json: it cannot be imported there.", target.Name))}[/]");
             return true;
         }
         return false;
@@ -211,15 +213,15 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
     {
         Header(target, "data bindings");
         List<BindingCheckRow> rows = [];
-        await Progress.RunAsync(log, "Comparing data bindings with the target packages...", async () => rows = await BindingCheck.CheckAsync(target.Client, manifest));
-        var t = new Table().Border(TableBorder.Rounded).AddColumn("Binding").AddColumn("Target package").AddColumn("State");
+        await Progress.RunAsync(log, T("Comparing data bindings with the target packages..."), async () => rows = await BindingCheck.CheckAsync(target.Client, manifest));
+        var t = new Table().Border(TableBorder.Rounded).AddColumn(Markup.Escape(T("Binding"))).AddColumn(Markup.Escape(T("Target package"))).AddColumn(Markup.Escape(T("State")));
         foreach (var r in rows)
             t.AddRow(Markup.Escape(r.Item.Name), Markup.Escape(r.Item.TargetPackage), r.State switch
             {
-                BindingState.New => "[green]new[/]",
-                BindingState.Same => "update (same UId)",
-                BindingState.Conflict => "[yellow]CONFLICT: same name, another UId[/]",
-                _ => $"[grey]unknown: {Markup.Escape(r.Error ?? "")}[/]"
+                BindingState.New => $"[green]{Markup.Escape(T("new"))}[/]",
+                BindingState.Same => Markup.Escape(T("update (same UId)")),
+                BindingState.Conflict => $"[yellow]{Markup.Escape(T("CONFLICT: same name, another UId"))}[/]",
+                _ => $"[grey]{Markup.Escape(F("unknown: {0}", r.Error ?? ""))}[/]"
             });
         AnsiConsole.Write(t);
         var conflicts = rows.Where(r => r.State == BindingState.Conflict).ToList();
@@ -230,14 +232,14 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         foreach (var c in conflicts)
         {
             var name = c.Item.Name;
-            var answer = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                .Title($"[yellow]{Markup.Escape(name)}[/] already exists in {Markup.Escape(c.Item.TargetPackage)} under another UId. What to do?")
+            var answer = AnsiConsole.Prompt(Select<string>()
+                .Title($"[yellow]{Markup.Escape(name)}[/] {Markup.Escape(F("already exists in {0} under another UId. What to do?", c.Item.TargetPackage))}")
                 .UseConverter(a => a switch
                 {
-                    useUid => "Use target UId [grey](update the target's binding in place)[/]",
-                    rename => $"Rename [grey](save as {Markup.Escape(BindingFix.DefaultRename(name))})[/]",
-                    skip => "Skip [grey](leave the target's binding as it is)[/]",
-                    _ => "[red]Abort import[/]"
+                    useUid => $"{Markup.Escape(T("Use target UId"))} [grey]({Markup.Escape(T("update the target's binding in place"))})[/]",
+                    rename => $"{Markup.Escape(T("Rename"))} [grey]({Markup.Escape(F("save as {0}", BindingFix.DefaultRename(name)))})[/]",
+                    skip => $"{Markup.Escape(T("Skip"))} [grey]({Markup.Escape(T("leave the target's binding as it is"))})[/]",
+                    _ => $"[red]{Markup.Escape(T("Abort import"))}[/]"
                 })
                 .AddChoices(useUid, rename, skip, abort));
             if (answer == abort) return null;
@@ -250,7 +252,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         }
         var resolved = Path.Combine(Path.GetDirectoryName(archive)!, Path.GetFileNameWithoutExtension(archive) + "-resolved.zip");
         BindingCheck.WriteResolvedArchive(archive, resolved, fixes);
-        AnsiConsole.MarkupLine($"[green]Conflicts resolved into[/] {Markup.Escape(resolved)}");
+        AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Conflicts resolved into"))}[/] {Markup.Escape(resolved)}");
         return resolved;
     }
 
@@ -261,24 +263,24 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         Header(target, "result");
         var (text, color) = code switch
         {
-            0 => ("Imported successfully.", "green"),
-            2 => ("Stopped by a check; nothing was installed.", "red"),
-            3 => ("Missing dependencies; nothing was installed.", "red"),
-            4 => ("The installation failed part-way. Backups are in the work dir; Restore rolls the stand back.", "red"),
-            _ => ("Imported, but the imported schemas do not compile.", "red")
+            0 => (T("Imported successfully."), "green"),
+            2 => (T("Stopped by a check; nothing was installed."), "red"),
+            3 => (T("Missing dependencies; nothing was installed."), "red"),
+            4 => (T("The installation failed part-way. Backups are in the work dir; Restore rolls the stand back."), "red"),
+            _ => (T("Imported, but the imported schemas do not compile."), "red")
         };
         AnsiConsole.MarkupLine($"[bold {color}]{Markup.Escape(text)}[/]");
         if (failure != null) AnsiConsole.MarkupLine($"[red]{Markup.Escape(failure)}[/]");
         if (r != null)
         {
-            if (r.Installed.Count > 0) AnsiConsole.MarkupLine($"Installed into: {Markup.Escape(string.Join(", ", r.Installed))}");
-            foreach (var n in r.Notes) AnsiConsole.MarkupLine($"[grey]Note:[/] {Markup.Escape(n)}");
-            foreach (var w in r.Warnings) AnsiConsole.MarkupLine($"[yellow]Warning:[/] {Markup.Escape(w)}");
+            if (r.Installed.Count > 0) AnsiConsole.MarkupLine(Markup.Escape(F("Installed into: {0}", string.Join(", ", r.Installed))));
+            foreach (var n in r.Notes) AnsiConsole.MarkupLine($"[grey]{Markup.Escape(T("Note:"))}[/] {Markup.Escape(n)}");
+            foreach (var w in r.Warnings) AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(T("Warning:"))}[/] {Markup.Escape(w)}");
             foreach (var e in r.CompileErrors.Take(20)) AnsiConsole.MarkupLine($"  [red]{Markup.Escape(e)}[/]");
-            if (r.CompileErrors.Count > 20) AnsiConsole.MarkupLine($"  [red]... {r.CompileErrors.Count - 20} more[/]");
-            if (r.StoppedAfterCompile) AnsiConsole.MarkupLine("[red]SQL AfterPackage/AfterSchemaData scripts and data bindings were NOT installed.[/]");
+            if (r.CompileErrors.Count > 20) AnsiConsole.MarkupLine($"  [red]{Markup.Escape(F("... {0} more", r.CompileErrors.Count - 20))}[/]");
+            if (r.StoppedAfterCompile) AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("SQL AfterPackage/AfterSchemaData scripts and data bindings were NOT installed."))}[/]");
         }
-        AnsiConsole.MarkupLine($"[grey]Work dir: {Markup.Escape(workDir)}[/]");
+        AnsiConsole.MarkupLine($"[grey]{Markup.Escape(F("Work dir: {0}", workDir))}[/]");
         await AfterRunAsync(target, workDir, offerRestore: code is 4 or 5 && File.Exists(Restorer.InfoPath(workDir)));
     }
 
@@ -291,8 +293,13 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
             if (offerRestore) choices.Add(restore);
             choices.Add(showLog);
             choices.Add(done);
-            var c = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                .UseConverter(x => x switch { restore => "[yellow]Restore[/] [grey](roll the stand back from this work dir)[/]", showLog => "Show the log", _ => "Done" })
+            var c = AnsiConsole.Prompt(Select<string>()
+                .UseConverter(x => x switch
+                {
+                    restore => $"[yellow]{Markup.Escape(T("Restore"))}[/] [grey]({Markup.Escape(T("roll the stand back from this work dir"))})[/]",
+                    showLog => Markup.Escape(T("Show the log")),
+                    _ => Markup.Escape(T("Done"))
+                })
                 .AddChoices(choices));
             if (c == done) return;
             if (c == showLog)
@@ -302,7 +309,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
                     {
                         LogLevel.Warn => $"[yellow]{Markup.Escape(line)}[/]",
                         LogLevel.Error => $"[red]{Markup.Escape(line)}[/]",
-                        LogLevel.Stage => $"[aqua]── {Markup.Escape(line)}[/]",
+                        LogLevel.Stage => $"[aqua]── {Markup.Escape(T(line))}[/]",
                         _ => $"[grey]{Markup.Escape(line)}[/]"
                     });
                 continue;
@@ -318,26 +325,26 @@ public sealed class RestoreFlow(UiLog log)
 {
     public async Task RunAsync(StandSession target, string workDir)
     {
-        AnsiConsole.MarkupLine($"Restore [bold]{Markup.Escape(target.Header)}[/] from [bold]{Markup.Escape(workDir)}[/].");
-        AnsiConsole.MarkupLine("[grey]Executed SQL scripts are not undone; elements, rows and packages the import created are listed, not removed.[/]");
-        var noCompile = AnsiConsole.Confirm("Skip the compilation afterwards?", false);
-        if (!AnsiConsole.Confirm("Start the restore?", false)) return;
+        AnsiConsole.MarkupLine($"{Markup.Escape(T("Restore"))} [bold]{Markup.Escape(target.Header)}[/] {Markup.Escape(T("from"))} [bold]{Markup.Escape(workDir)}[/].");
+        AnsiConsole.MarkupLine($"[grey]{Markup.Escape(T("Executed SQL scripts are not undone; elements, rows and packages the import created are listed, not removed."))}[/]");
+        var noCompile = UiInput.Confirm(T("Skip the compilation afterwards?"), false);
+        if (!UiInput.Confirm(T("Start the restore?"), false)) return;
         RestoreResult r;
-        try { r = await Progress.RunStagesAsync(log, $"Restoring {target.Name}", () => new Restorer(target.Client).RestoreAsync(workDir, noCompile)); }
+        try { r = await Progress.RunStagesAsync(log, F("Restoring {0}", target.Name), () => new Restorer(target.Client).RestoreAsync(workDir, noCompile)); }
         catch (Exception ex) when (ex is ArgumentException or CreatioException or IOException or HttpRequestException or TaskCanceledException)
         {
-            AnsiConsole.MarkupLine($"[red]Restore failed:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("Restore failed:"))}[/] {Markup.Escape(ex.Message)}");
             UiInput.Pause();
             return;
         }
-        AnsiConsole.MarkupLine(r.CompileErrors.Count == 0 ? "[bold green]Restored.[/]" : "[bold red]Restored, but the configuration does not compile.[/]");
-        if (r.Restored.Count > 0) AnsiConsole.MarkupLine($"Restored: {Markup.Escape(string.Join(", ", r.Restored))}");
+        AnsiConsole.MarkupLine(r.CompileErrors.Count == 0 ? $"[bold green]{Markup.Escape(T("Restored."))}[/]" : $"[bold red]{Markup.Escape(T("Restored, but the configuration does not compile."))}[/]");
+        if (r.Restored.Count > 0) AnsiConsole.MarkupLine(Markup.Escape(F("Restored: {0}", string.Join(", ", r.Restored))));
         if (r.NotRemoved.Count > 0)
         {
-            AnsiConsole.MarkupLine("[yellow]Created by the import and NOT removed (delete manually if needed):[/]");
+            AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(T("Created by the import and NOT removed (delete manually if needed):"))}[/]");
             foreach (var n in r.NotRemoved) AnsiConsole.MarkupLine($"  • {Markup.Escape(n)}");
         }
-        foreach (var w in r.Warnings) AnsiConsole.MarkupLine($"[yellow]Warning:[/] {Markup.Escape(w)}");
+        foreach (var w in r.Warnings) AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(T("Warning:"))}[/] {Markup.Escape(w)}");
         foreach (var e in r.CompileErrors.Take(20)) AnsiConsole.MarkupLine($"  [red]{Markup.Escape(e)}[/]");
         UiInput.Pause();
     }
@@ -349,7 +356,7 @@ public static class Progress
     public static async Task<T> RunAsync<T>(UiLog log, string title, Func<Task<T>> work)
     {
         T result = default!;
-        await AnsiConsole.Status().StartAsync(title, async ctx =>
+        await AnsiConsole.Status().StartAsync(Markup.Escape(title), async ctx =>
         {
             void OnInfo(string line) => ctx.Status(Markup.Escape(UiApp.Fit(line, 6)));
             log.InfoWritten += OnInfo;
@@ -382,8 +389,8 @@ public static class Progress
                 bool current = i == copy.Count - 1;
                 var end = current ? DateTime.Now : copy[i + 1].Start;
                 rows.Add(new Markup(current
-                    ? $"  [aqua]▶ {Markup.Escape(copy[i].Name)}[/]  [grey]{Elapsed(end - copy[i].Start)}[/]"
-                    : $"  [green]✓[/] {Markup.Escape(copy[i].Name)}  [grey]{Elapsed(end - copy[i].Start)}[/]"));
+                    ? $"  [aqua]▶ {Markup.Escape(L.T(copy[i].Name))}[/]  [grey]{Elapsed(end - copy[i].Start)}[/]"
+                    : $"  [green]✓[/] {Markup.Escape(L.T(copy[i].Name))}  [grey]{Elapsed(end - copy[i].Start)}[/]"));
             }
             rows.Add(new Markup($"  [grey]{Markup.Escape(UiApp.Fit(last, 6))}[/]"));
             return new Rows(rows);

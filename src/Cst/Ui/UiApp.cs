@@ -2,12 +2,13 @@ using System.Text;
 using Cst.Config;
 using Cst.Creatio;
 using Spectre.Console;
+using static Cst.Ui.L;
 
 namespace Cst.Ui;
 
 /// <summary>
 /// The console UI: cst started without arguments (or only with --settings) in an interactive console.
-/// Main menu: Export · Import · Restore · Quit. Uses the same classes as the CLI, never cst as a process.
+/// Main menu: Export · Import · Restore · Language · Quit. Uses the same classes as the CLI, never cst as a process.
 /// </summary>
 public sealed class UiApp
 {
@@ -35,18 +36,20 @@ public sealed class UiApp
         catch (IOException) { /* keep the console's encoding */ }
 
         var previousSink = Log.Sink;
+        var previousLanguage = L.Language;
         UiApp? app = null;
         try
         {
+            var statePath = UiState.PathNextTo(settingsPath);
+            var state = UiState.Load(statePath, out var warning);
+            L.Language = L.Parse(state.Language);
             AppSettings settings;
             try { settings = AppSettings.Load(settingsPath); }
             catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or UnauthorizedAccessException)
             {
-                AnsiConsole.MarkupLine($"[red]Cannot read {Markup.Escape(settingsPath)}:[/] {Markup.Escape(ex.Message)}");
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(F("Cannot read {0}:", settingsPath))}[/] {Markup.Escape(ex.Message)}");
                 return 1;
             }
-            var statePath = UiState.PathNextTo(settingsPath);
-            var state = UiState.Load(statePath, out var warning);
             app = new UiApp(settingsPath, settings, statePath, state);
             Log.Sink = app._log.Write;
             Console.CancelKeyPress += app.OnCancel;
@@ -57,6 +60,7 @@ public sealed class UiApp
         {
             if (app != null) Console.CancelKeyPress -= app.OnCancel;
             Log.Sink = previousSink;
+            L.Language = previousLanguage;
             app?._envs.DisposeAll();
             if (previousEncoding != null)
             {
@@ -74,12 +78,12 @@ public sealed class UiApp
         try { Console.CursorVisible = true; } catch (IOException) { }
         _state.Save(_statePath);
         Console.WriteLine();
-        Console.WriteLine("cst: interrupted.");
+        Console.WriteLine(T("cst: interrupted."));
         if (_log.FilePath is { } logFile)
-            Console.WriteLine($"An import was running; its backups and restore.json are in {Path.GetDirectoryName(logFile)} (main menu → Restore).");
+            Console.WriteLine(F("An import was running; its backups and restore.json are in {0} (main menu → Restore).", Path.GetDirectoryName(logFile)));
     }
 
-    private const string Export = "Export", Import = "Import", Restore = "Restore", Quit = "Quit";
+    private const string Export = "Export", Import = "Import", Restore = "Restore", Language = "Language", Quit = "Quit";
 
     private async Task<int> MainLoopAsync()
     {
@@ -87,16 +91,18 @@ public sealed class UiApp
         {
             AnsiConsole.Clear();
             Title();
-            var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-                .Title("What do you want to do?")
+            var col = NameColumn(T("Export"), T("Import"), T("Restore"), T("Language"));
+            var choice = AnsiConsole.Prompt(Select<string>()
+                .Title(T("What do you want to do?"))
                 .UseConverter(c => c switch
                 {
-                    Export => MenuLine("Export", "select schemas and files, save a list or an archive"),
-                    Import => MenuLine("Import", "install an archive or a list into a stand"),
-                    Restore => MenuLine("Restore", "roll a stand back from an import's backup"),
-                    _ => "Quit"
+                    Export => MenuLine(T("Export"), T("select schemas and files, save a list or an archive"), col),
+                    Import => MenuLine(T("Import"), T("install an archive or a list into a stand"), col),
+                    Restore => MenuLine(T("Restore"), T("roll a stand back from an import's backup"), col),
+                    Language => MenuLine(T("Language"), L.Language == UiLanguage.Ukrainian ? "Українська · English" : "English · Українська", col),
+                    _ => Markup.Escape(T("Quit"))
                 })
-                .AddChoices(Export, Import, Restore, Quit));
+                .AddChoices(Export, Import, Restore, Language, Quit));
             try
             {
                 switch (choice)
@@ -104,6 +110,7 @@ public sealed class UiApp
                     case Export: await ExportAsync(); break;
                     case Import: await ImportAsync(); break;
                     case Restore: await RestoreAsync(); break;
+                    case Language: ChooseLanguage(); break;
                     default:
                         SaveState();
                         return 0;
@@ -112,13 +119,26 @@ public sealed class UiApp
             catch (Exception ex)
             {
                 // A failure in one flow returns to the menu instead of ending the session.
-                AnsiConsole.MarkupLine($"[red]Unexpected error:[/] {Markup.Escape(ex.Message)}");
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("Unexpected error:"))}[/] {Markup.Escape(ex.Message)}");
                 Log.Error(ex.ToString());
                 UiInput.Pause();
             }
             SaveState();
         }
     }
+
+    private void ChooseLanguage()
+    {
+        var choice = AnsiConsole.Prompt(Select<UiLanguage>()
+            .Title(T("Language of the menus:"))
+            .UseConverter(l => l == UiLanguage.Ukrainian ? "Українська" : "English")
+            .AddChoices(L.Language, L.Language == UiLanguage.English ? UiLanguage.Ukrainian : UiLanguage.English));
+        L.Language = choice;
+        _state.Language = L.Code;
+    }
+
+    /// <summary>Width of the name column of a menu: the longest name plus two spaces.</summary>
+    public static int NameColumn(params string[] names) => names.Max(n => n.Length) + 2;
 
     /// <summary>
     /// A menu choice that never wraps: a wrapped line breaks the prompt's redraw (the menu is printed again
@@ -147,8 +167,8 @@ public sealed class UiApp
         AnsiConsole.Write(new Rule("[bold]cst[/] [grey]· Creatio Schema Transfer[/]").LeftJustified());
         var connected = _envs.Sessions.Select(s => s.Header).ToList();
         AnsiConsole.MarkupLine(connected.Count == 0
-            ? $"[grey]Settings: {Markup.Escape(_settingsPath)}[/]"
-            : $"[grey]Connected: {Markup.Escape(string.Join("  |  ", connected))}[/]");
+            ? $"[grey]{Markup.Escape(F("Settings: {0}", _settingsPath))}[/]"
+            : $"[grey]{Markup.Escape(F("Connected: {0}", string.Join("  |  ", connected)))}[/]");
         AnsiConsole.WriteLine();
     }
 
@@ -160,12 +180,12 @@ public sealed class UiApp
 
     private async Task ExportAsync()
     {
-        var source = await _envs.PickAsync(StandPurpose.Source, "Export from which stand?");
+        var source = await _envs.PickAsync(StandPurpose.Source, T("Export from which stand?"));
         if (source == null) return;
-        Header(source, "Export");
+        Header(source, T("Export"));
         var catalog = new Catalog(source.Client);
         List<PackageInfo> packages = [];
-        await AnsiConsole.Status().StartAsync("Loading packages...", async _ => packages = await catalog.LoadPackagesAsync());
+        await AnsiConsole.Status().StartAsync(Markup.Escape(T("Loading packages...")), async _ => packages = await catalog.LoadPackagesAsync());
 
         var packageTab = new PackageSource(catalog, packages);
         var tabs = new List<IBrowserSource> { packageTab };
@@ -177,17 +197,18 @@ public sealed class UiApp
 
         // Manual selection, or a saved list loaded into the same selection (then straight to the summary).
         const string manual = "manual", fromList = "list";
-        var how = AnsiConsole.Prompt(new SelectionPrompt<string>()
-            .Title("What to export?")
+        var col = NameColumn(T("Select"), T("Load a list"));
+        var how = AnsiConsole.Prompt(Select<string>()
+            .Title(T("What to export?"))
             .UseConverter(c => c == manual
-                ? MenuLine("Select", "mark packages, schemas and files by hand", 12)
-                : MenuLine("Load a list", "take a saved list (package/packages/files sections)", 12))
+                ? MenuLine(T("Select"), T("mark packages, schemas and files by hand"), col)
+                : MenuLine(T("Load a list"), T("take a saved list (package/packages/files sections)"), col))
             .AddChoices(manual, fromList));
         bool skipBrowser = false;
         if (how == fromList)
         {
             skipBrowser = await LoadListAsync(source, packageTab, fileTab, summary);
-            if (!skipBrowser && !AnsiConsole.Confirm("Continue with manual selection?", true)) return;
+            if (!skipBrowser && !UiInput.Confirm(T("Continue with manual selection?"), true)) return;
         }
 
         while (true)
@@ -209,7 +230,7 @@ public sealed class UiApp
     /// </summary>
     private async Task<bool> LoadListAsync(StandSession source, PackageSource packageTab, FileSource? fileTab, SummaryScreen summary)
     {
-        var path = FilePicker.Pick("Which list to load?", _state, BaseDir, archives: false, lists: true);
+        var path = FilePicker.Pick(T("Which list to load?"), _state, BaseDir, archives: false, lists: true);
         if (path == null) return false;
         List<SchemaListPackage> sections;
         List<string> whole, files;
@@ -221,32 +242,32 @@ public sealed class UiApp
         }
         catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
         {
-            AnsiConsole.MarkupLine($"[red]Cannot read the list:[/] {Markup.Escape(ex.Message)}");
+            AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("Cannot read the list:"))}[/] {Markup.Escape(ex.Message)}");
             UiInput.Pause();
             return false;
         }
         var problems = new List<string>();
-        await AnsiConsole.Status().StartAsync($"Loading {Markup.Escape(Path.GetFileName(path))}...", async _ =>
+        await AnsiConsole.Status().StartAsync(Markup.Escape(F("Loading {0}...", Path.GetFileName(path))), async _ =>
             problems = await packageTab.ApplyListAsync(sections, whole));
         if (files.Count > 0)
         {
-            if (fileTab == null) problems.Add($"files: section ({files.Count} entr{(files.Count == 1 ? "y" : "ies")}) skipped: {source.Name} has no \"Path\" (Creatio folder) in appsettings.json");
+            if (fileTab == null) problems.Add(F("files: section ({0} entries) skipped: {1} has no \"Path\" (Creatio folder) in appsettings.json", files.Count, source.Name));
             else foreach (var f in files) fileTab.Selection.Add(f);
         }
         summary.ApplyMapping(sections);
         UiState.Remember(_state.RecentLists, path);
 
         int elements = sections.Sum(s => s.Entries.Count);
-        AnsiConsole.MarkupLine($"[green]Loaded[/] {Markup.Escape(Path.GetFileName(path))}: {elements} element entr{(elements == 1 ? "y" : "ies")}, "
-            + $"{whole.Count} whole package(s), {(fileTab == null ? 0 : files.Count)} file entr{(files.Count == 1 ? "y" : "ies")}.");
+        AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Loaded"))}[/] " + Markup.Escape(F("{0}: element entries: {1}, whole packages: {2}, file entries: {3}.",
+            Path.GetFileName(path), elements, whole.Count, fileTab == null ? 0 : files.Count)));
         if (problems.Count > 0)
         {
-            AnsiConsole.MarkupLine($"[yellow]Not applied ({problems.Count}):[/]");
+            AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(F("Not applied ({0}):", problems.Count))}[/]");
             foreach (var p in problems) AnsiConsole.MarkupLine($"  [yellow]•[/] {Markup.Escape(p)}");
         }
         bool any = packageTab.HasSelection || (fileTab?.HasSelection ?? false);
-        if (!any) AnsiConsole.MarkupLine("[red]Nothing from the list exists on this stand.[/]");
-        UiInput.Pause(any ? "Press any key to open the summary..." : "Press any key to continue...");
+        if (!any) AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("Nothing from the list exists on this stand."))}[/]");
+        UiInput.Pause(any ? T("Press any key to open the summary...") : T("Press any key to continue..."));
         return any;
     }
 
@@ -256,25 +277,25 @@ public sealed class UiApp
 
     private async Task RestoreAsync()
     {
-        var target = await _envs.PickAsync(StandPurpose.Target, "Restore which stand?");
+        var target = await _envs.PickAsync(StandPurpose.Target, T("Restore which stand?"));
         if (target == null) return;
-        Header(target, "Restore");
+        Header(target, T("Restore"));
         const string typed = "\u0000typed", back = "\u0000back";
         var dirs = _state.RecentWorkDirs.Where(d => File.Exists(Transfer.Restorer.InfoPath(d))).ToList();
-        var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-            .Title("Restore from which import work dir?")
+        var choice = AnsiConsole.Prompt(Select<string>()
+            .Title(T("Restore from which import work dir?"))
             .PageSize(12)
             .UseConverter(c => c switch
             {
-                typed => "[grey]Type a path…[/]",
-                back => "[grey]← Back[/]",
+                typed => $"[grey]{Markup.Escape(T("Type a path…"))}[/]",
+                back => $"[grey]{Markup.Escape(T("← Back"))}[/]",
                 _ => Markup.Escape(Fit($"{Directory.GetLastWriteTime(c):yyyy-MM-dd HH:mm}  {c}", 6))
             })
             .AddChoices(dirs.Append(typed).Append(back)));
         if (choice == back) return;
         if (choice == typed)
-            choice = AnsiConsole.Prompt(new TextPrompt<string>("Work dir (holds restore.json):").Validate(p =>
-                File.Exists(Transfer.Restorer.InfoPath(p.Trim().Trim('"'))) ? ValidationResult.Success() : ValidationResult.Error("No restore.json there."))).Trim().Trim('"');
+            choice = AnsiConsole.Prompt(L.Text(Markup.Escape(T("Work dir (holds restore.json):"))).Validate(p =>
+                File.Exists(Transfer.Restorer.InfoPath(p.Trim().Trim('"'))) ? ValidationResult.Success() : ValidationResult.Error(Markup.Escape(T("No restore.json there."))))).Trim().Trim('"');
         await new RestoreFlow(_log).RunAsync(target, choice);
     }
 
