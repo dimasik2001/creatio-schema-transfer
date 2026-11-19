@@ -221,11 +221,28 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
         if (_status != null) lines.Add([new Seg(_status, "yellow")]);
         else
         {
-            var keys = "↑↓ move  Enter/→ open  ←/Backspace up  Space mark  type to filter  Esc back  F2 done";
-            if (tabs.Count > 1) keys += "  Tab switch";
-            if (source.KeyHint != null) keys += "  " + source.KeyHint;
-            lines.Add([new Seg(keys, "grey")]);
+            lines.Add([new Seg(KeyHints(source), "grey")]);
         }
         _screen.Render(lines);
+    }
+
+    /// <summary>
+    /// Key hints that fit the window: shown in a fixed order, but in a narrow window the least important are left
+    /// out first, so F2 / Space / Enter / Esc always stay visible.
+    /// </summary>
+    private string KeyHints(IBrowserSource source)
+    {
+        // (text, priority: lower = more important)
+        var hints = new List<(string Text, int Priority)>
+        {
+            ("↑↓ move", 7), ("Enter/→ open", 2), ("←/Bksp up", 5), ("Space mark", 1), ("type to filter", 6), ("Esc back", 3), ("F2 done", 0)
+        };
+        if (tabs.Count > 1) hints.Add(("Tab switch", 4));
+        if (source.KeyHint != null) hints.Add((source.KeyHint, 4));
+        int width = _screen.Width;
+        var shown = hints.ToList();
+        while (shown.Count > 1 && string.Join("  ", shown.Select(h => h.Text)).Length > width)
+            shown.Remove(shown.OrderByDescending(h => h.Priority).First());
+        return string.Join("  ", shown.Select(h => h.Text));
     }
 }

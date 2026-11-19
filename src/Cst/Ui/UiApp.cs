@@ -49,11 +49,13 @@ public sealed class UiApp
             var state = UiState.Load(statePath, out var warning);
             app = new UiApp(settingsPath, settings, statePath, state);
             Log.Sink = app._log.Write;
+            Console.CancelKeyPress += app.OnCancel;
             if (warning != null) AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(warning)}[/]");
             return await app.MainLoopAsync();
         }
         finally
         {
+            if (app != null) Console.CancelKeyPress -= app.OnCancel;
             Log.Sink = previousSink;
             app?._envs.DisposeAll();
             if (previousEncoding != null)
@@ -61,6 +63,20 @@ public sealed class UiApp
                 try { Console.OutputEncoding = previousEncoding; } catch (IOException) { }
             }
         }
+    }
+
+    /// <summary>
+    /// Ctrl+C ends cst as before, but first makes the cursor visible again, keeps the remembered choices and says
+    /// where an interrupted import left its backups. An import writes restore.json as it goes, so Restore works.
+    /// </summary>
+    private void OnCancel(object? sender, ConsoleCancelEventArgs e)
+    {
+        try { Console.CursorVisible = true; } catch (IOException) { }
+        _state.Save(_statePath);
+        Console.WriteLine();
+        Console.WriteLine("cst: interrupted.");
+        if (_log.FilePath is { } logFile)
+            Console.WriteLine($"An import was running; its backups and restore.json are in {Path.GetDirectoryName(logFile)} (main menu → Restore).");
     }
 
     private const string Export = "Export", Import = "Import", Restore = "Restore", Quit = "Quit";

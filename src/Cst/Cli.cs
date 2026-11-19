@@ -13,6 +13,9 @@ static class Cli
     const string Usage = """
         cst — transfer selected Creatio schemas, SQL scripts and data bindings between environments.
 
+        Interactive UI: run cst without arguments (or with only --settings <file>) in a console window
+          (Windows Terminal, powershell.exe; not PowerShell ISE): Export · Import · Restore with menus.
+
         Usage:
           cst export  --env <src> (--config <list.txt> | --schemas "Pkg->Target:A,B;Pkg2:C") --out <transfer.zip>
           cst import  --env <dst> --archive <transfer.zip> [--dry-run] [--no-compile] [--rebuild] [--data-designer]
@@ -53,6 +56,8 @@ static class Cli
 
     public static async Task<int> RunAsync(string[] argv)
     {
+        // Hosts can pass empty arguments (PowerShell: @($null)); they mean nothing.
+        argv = argv.Where(a => !string.IsNullOrEmpty(a)).ToArray();
         // Console UI: no arguments, or only --settings (run.ps1 and wrappers always pass it), in an interactive console.
         bool uiArgs = argv.Length == 0 || (argv.Length == 2 && argv[0].Equals("--settings", StringComparison.OrdinalIgnoreCase));
         if (uiArgs && Cst.Ui.UiInput.IsInteractive())
