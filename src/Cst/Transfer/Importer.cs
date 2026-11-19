@@ -60,7 +60,21 @@ public sealed class Importer(CreatioClient client)
         public Guid UId => Existing.UId;
         public List<ManifestItem> Items { get; } = [];
         /// <summary>Names of packages (on target) this package must depend on.</summary>
-        public HashSet<string> Requires { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, SortedSet<string>> Requires { get; } = new(StringComparer.OrdinalIgnoreCase);
+        /// <summary>
+        /// References from business processes: Creatio's process designer offers every object of the system and a
+        /// process refers to it by UId/name, so outside the hierarchy it still works when both packages compile into
+        /// Terrasoft.Configuration. Reported as a warning then, not as a missing dependency.
+        /// </summary>
+        public Dictionary<string, SortedSet<string>> SoftRequires { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Records that this package needs <paramref name="package"/> because of one reference ("A → B").</summary>
+        public void Require(string package, string reason, bool soft = false)
+        {
+            var map = soft ? SoftRequires : Requires;
+            if (!map.TryGetValue(package, out var reasons)) map[package] = reasons = new(StringComparer.OrdinalIgnoreCase);
+            reasons.Add(reason);
+        }
     }
 
     public async Task<ImportResult> ImportAsync(string archivePath, ImportOptions options)
@@ -169,17 +183,21 @@ public sealed class Importer(CreatioClient client)
             missing.Add($"Package **{name}** does not exist on the target — needed for {string.Join(", ", items)}. Install it first.");
 
         // 3. Package dependencies each target package needs; they must already be in its hierarchy.
+        var itemByUId = manifest.Items.GroupBy(i => i.UId).ToDictionary(g => g.Key, g => g.First());
         foreach (var t in targets.Values)
             foreach (var item in t.Items)
             {
+                var soft = item.Kind == ItemKind.Schema && item.Manager == "ProcessSchemaManager";
                 foreach (var dep in item.DependsOn)
-                    if (itemTarget.TryGetValue(dep, out var depPkg) && depPkg != t) t.Requires.Add(depPkg.Name);
+                    if (itemTarget.TryGetValue(dep, out var depPkg) && depPkg != t && itemByUId.TryGetValue(dep, out var depItem))
+                        t.Require(depPkg.Name, $"{ItemLabel(item)} → {ItemLabel(depItem)} (in this archive)", soft);
                 foreach (var ext in item.External)
                 {
                     if (!onTarget.TryGetValue(ext, out var els)) continue;
                     var el = els.OrderBy(e => e.ExtendParent).First();
                     var pkgName = pkgById[el.PackageId].Name;
-                    if (!pkgName.Equals(t.Name, StringComparison.OrdinalIgnoreCase)) t.Requires.Add(pkgName);
+                    if (!pkgName.Equals(t.Name, StringComparison.OrdinalIgnoreCase))
+                        t.Require(pkgName, $"{ItemLabel(item)} → {el.Name} ({ElementKindLabel(el.Kind, el.ManagerName)})", soft);
                 }
             }
         HashSet<string> Closure(string name, HashSet<string>? seen = null)
@@ -193,8 +211,28 @@ public sealed class Importer(CreatioClient client)
         foreach (var t in targets.Values)
         {
             var closure = Closure(t.Name);
-            foreach (var r in t.Requires.Where(r => !closure.Contains(r)))
-                missing.Add($"Package **{t.Name}** must depend on **{r}** (its elements reference {r}). Add the dependency on the target.");
+            foreach (var r in t.Requires.Keys.Concat(t.SoftRequires.Keys).Distinct(StringComparer.OrdinalIgnoreCase).Where(r => !closure.Contains(r)).ToList())
+            {
+                var hard = t.Requires.GetValueOrDefault(r)?.ToList() ?? [];
+                var soft = t.SoftRequires.GetValueOrDefault(r)?.ToList() ?? [];
+                // Process references are fine while both packages compile into Terrasoft.Configuration.
+                var separate = new[] { t.Existing, pkgByName.GetValueOrDefault(r) }.Where(p => p?.IsSeparateAssembly == true).Select(p => p!.Name).ToList();
+                if (soft.Count > 0 && separate.Count == 0)
+                {
+                    result.Warnings.Add($"Processes in {t.Name} reference {r}, which is outside its dependencies. Creatio allows this (the process designer offers every object; " +
+                        $"both packages compile into Terrasoft.Configuration), so they are installed; the designers of {t.Name} do not show {r}'s elements:" +
+                        string.Concat(soft.Select(x => "\n    - " + x)));
+                    soft = [];
+                }
+                if (hard.Count + soft.Count == 0) continue;
+                var cycle = Closure(r).Contains(t.Name)
+                    ? $" {r} already depends on {t.Name}, so adding this dependency would make a cycle: move the referencing element(s) to a package above {r}, or the referenced one(s) below {t.Name}."
+                    : " Add the dependency on the target, or move the referencing element(s) to a package that already depends on it.";
+                if (soft.Count > 0)
+                    cycle += $" Process references are allowed only when both packages compile into Terrasoft.Configuration; {string.Join(" and ", separate)} {(separate.Count == 1 ? "compiles into a separate assembly" : "compile into separate assemblies")}.";
+                missing.Add($"Package **{t.Name}** does not depend on **{r}**, but its elements reference {r}.{cycle}" +
+                    string.Concat(hard.Concat(soft).Select(x => "\n    - " + x)));
+            }
         }
 
         if (missing.Count > 0)
@@ -574,6 +612,14 @@ public sealed class Importer(CreatioClient client)
         foreach (var i in items.Except(existing))
             ((JsonArray)restore["createdSchemas"]!).Add($"{t.Name}/{i.Name}");
     }
+
+    private static string ItemLabel(ManifestItem i) => $"{i.Name} ({ElementKindLabel(i.Kind, i.Manager)})";
+
+    /// <summary>"Entity", "Process", "ClientUnit", "SqlScript", "Data"...: the manager without its SchemaManager suffix.</summary>
+    private static string ElementKindLabel(ItemKind kind, string? manager) =>
+        kind == ItemKind.Schema && !string.IsNullOrEmpty(manager)
+            ? (manager!.EndsWith("SchemaManager", StringComparison.Ordinal) ? manager.Substring(0, manager.Length - "SchemaManager".Length) : manager)
+            : kind.ToString();
 
     private static string WriteMissingReport(string archivePath, List<string> missing)
     {

@@ -3,8 +3,11 @@ using Cst.Packaging;
 
 namespace Cst.Creatio;
 
-public sealed record PackageInfo(Guid Id, Guid UId, string Name, string Version, string Maintainer, int InstallType)
+public sealed record PackageInfo(Guid Id, Guid UId, string Name, string Version, string Maintainer, int InstallType, int Type = 0)
 {
+    /// <summary>"Compile into a separate assembly" (SysPackage.Type 1); 0 = compiled into Terrasoft.Configuration.</summary>
+    public bool IsSeparateAssembly => Type != 0;
+
     /// <summary>Custom packages (InstallType 0) can be changed; repository/base packages cannot.</summary>
     public bool IsEditable => InstallType == 0;
 
@@ -30,10 +33,10 @@ public sealed class Catalog(CreatioClient client)
     public async Task<List<PackageInfo>> LoadPackagesAsync()
     {
         var q = Query("SysPackage", ("Id", "Id"), ("UId", "UId"), ("Name", "Name"), ("Version", "Version"),
-            ("Maintainer", "Maintainer"), ("InstallType", "InstallType"));
+            ("Maintainer", "Maintainer"), ("InstallType", "InstallType"), ("Type", "Type"));
         return (await client.SelectAsync(q)).Select(r => new PackageInfo(
             G(r, "Id"), G(r, "UId"), S(r, "Name"), S(r, "Version"), S(r, "Maintainer"),
-            r["InstallType"]?.GetValue<int>() ?? 0)).ToList();
+            r["InstallType"]?.GetValue<int>() ?? 0, r["Type"]?.GetValue<int>() ?? 0)).ToList();
     }
 
     /// <summary>Direct dependencies: package Id → Ids of packages it depends on.</summary>
