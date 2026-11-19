@@ -18,6 +18,8 @@ public sealed class UiLog
     /// <summary>Last stage reported by <see cref="Log.Stage"/> and when it started.</summary>
     public (string Name, DateTime Started)? Stage { get; private set; }
     public event Action<string>? StageChanged;
+    /// <summary>Every Info line (a progress view shows the latest one).</summary>
+    public event Action<string>? InfoWritten;
 
     public void Write(LogLevel level, string text)
     {
@@ -36,6 +38,7 @@ public sealed class UiLog
             }
         }
         if (level == LogLevel.Stage) StageChanged?.Invoke(text);
+        if (level == LogLevel.Info) InfoWritten?.Invoke(text);
         if (Quiet) return;
         if (level == LogLevel.Warn) AnsiConsole.MarkupLine($"[yellow]WARN:[/] {Markup.Escape(text)}");
         else if (level == LogLevel.Error) AnsiConsole.MarkupLine($"[red]ERROR:[/] {Markup.Escape(text)}");

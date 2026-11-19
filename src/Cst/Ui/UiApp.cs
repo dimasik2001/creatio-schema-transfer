@@ -108,21 +108,20 @@ public sealed class UiApp
     /// A menu choice that never wraps: a wrapped line breaks the prompt's redraw (the menu is printed again
     /// below itself in narrow windows). The grey description is cut to the window width.
     /// </summary>
-    public static string MenuLine(string name, string description)
+    public static string MenuLine(string name, string description, int nameColumn = 10)
     {
-        int width;
-        try { width = Console.WindowWidth; } catch (IOException) { width = 80; }
-        int room = width - 2 /* "> " */ - 10 /* name column */ - 2;
+        int width = UiInput.Width;
+        int room = width - 2 /* "> " */ - nameColumn - 2;
         if (room < 8) return Markup.Escape(name);
         if (description.Length > room) description = description.Substring(0, room - 1) + "…";
-        return $"{Markup.Escape(name.PadRight(10))}[grey]{Markup.Escape(description)}[/]";
+        return $"{Markup.Escape(name.PadRight(nameColumn))}[grey]{Markup.Escape(description)}[/]";
     }
 
     /// <summary>Cuts plain text to fit one console line (for prompt choices and titles).</summary>
     public static string Fit(string text, int reserve = 4)
     {
         int width;
-        try { width = Console.WindowWidth; } catch (IOException) { width = 80; }
+        width = UiInput.Width;
         int room = Math.Max(10, width - reserve);
         return text.Length <= room ? text : text.Substring(0, room - 1) + "…";
     }
@@ -157,18 +156,14 @@ public sealed class UiApp
         FileSource? fileTab = source.HasPath ? new FileSource(source.Settings.Path!) : null;
         if (fileTab != null) tabs.Add(fileTab);
 
+        var baseDir = Path.GetDirectoryName(Path.GetFullPath(_settingsPath)) ?? AppContext.BaseDirectory;
+        var summary = new SummaryScreen(source, packages, packageTab, fileTab, _envs, _state, _log, baseDir);
         while (true)
         {
             var result = await new SelectionBrowser(source.Header, tabs).RunAsync();
             if (result == BrowserResult.Back) return;
-
-            // Temporary summary (step 5 replaces it with the real one: mapping, references, save/export/import).
-            Header(source, "Export · selection");
-            var (elements, whole) = packageTab.ToSelection();
-            var text = SchemaList.Write(elements, fileTab?.Selection.Entries(), [$"cst console UI, source {source.Name}"], whole);
-            AnsiConsole.Write(new Panel(new Text(text)).Header("List preview").Expand());
-            var next = AnsiConsole.Prompt(new SelectionPrompt<string>().AddChoices("Back to selection", "Main menu"));
-            if (next == "Main menu") return;
+            if (await summary.RunAsync() == SummaryResult.MainMenu) return;
+            summary.SelectionChanged();
         }
     }
 

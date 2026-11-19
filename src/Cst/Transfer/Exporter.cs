@@ -99,20 +99,35 @@ public sealed partial class Exporter(CreatioClient client)
         list = list.Where(p => p.Entries.Count > 0).ToList();
         if (list.Count == 0) return [];
         var manifest = new Manifest { SourceUrl = client.Url };
-        var sources = await CollectItemsAsync(list, manifest);
+        var sources = await CollectItemsAsync(list, manifest, useCache: true);
         await ResolveDependenciesAsync(manifest, sources);
         return manifest.External.Where(e => isOwnPackage(e.SourcePackage)).ToList();
     }
 
+    /// <summary>
+    /// Session cache of downloaded source packages (console UI). Reference checks reuse it; an export always
+    /// downloads again (the archive must hold the stand's current state) and refreshes it.
+    /// </summary>
+    public Dictionary<string, PackageContent>? PackageCache { get; init; }
+
     /// <summary>Downloads the listed packages and adds their listed elements to the manifest (packages and items).</summary>
-    private async Task<Dictionary<string, PackageContent>> CollectItemsAsync(List<SchemaListPackage> list, Manifest manifest)
+    private async Task<Dictionary<string, PackageContent>> CollectItemsAsync(List<SchemaListPackage> list, Manifest manifest, bool useCache = false)
     {
         var errors = new List<string>();
         var sources = new Dictionary<string, PackageContent>(StringComparer.OrdinalIgnoreCase);
-        if (list.Count > 0)
+        var cached = useCache && PackageCache != null
+            ? list.Where(p => PackageCache.ContainsKey(p.Source)).Select(p => p.Source).ToList() : new List<string>();
+        foreach (var name in cached) sources[name] = PackageCache![name];
+        var toDownload = list.Select(p => p.Source).Where(n => !sources.ContainsKey(n)).ToList();
+        if (cached.Count > 0) Log.Info($"Using packages downloaded earlier in this session: {string.Join(", ", cached)}");
+        if (toDownload.Count > 0)
         {
-            Log.Info($"Downloading packages from {client.Url}: {string.Join(", ", list.Select(p => p.Source))}");
-            sources = PackageGz.ReadZip(await client.GetZipPackagesAsync(list.Select(p => p.Source)));
+            Log.Info($"Downloading packages from {client.Url}: {string.Join(", ", toDownload)}");
+            foreach (var (name, content) in PackageGz.ReadZip(await client.GetZipPackagesAsync(toDownload)))
+            {
+                sources[name] = content;
+                if (PackageCache != null) PackageCache[name] = content;
+            }
         }
 
         foreach (var pkg in list)

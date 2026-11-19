@@ -81,7 +81,7 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
                 _cursor = items.Count == 0 ? 0 : Math.Min(Math.Max(0, _cursor), items.Count - 1);
                 Draw(source, items);
 
-                var key = Console.ReadKey(intercept: true);
+                var key = UiInput.ReadKey();
                 var current = items.Count > 0 ? items[_cursor] : null;
                 _status = null;
                 bool ctrl = (key.Modifiers & ConsoleModifiers.Control) != 0;
@@ -155,12 +155,12 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
     {
         _status = question;
         Draw(source, items);
-        var k = Console.ReadKey(intercept: true);
+        var k = UiInput.ReadKey();
         _status = null;
         return k.Key == ConsoleKey.Y;
     }
 
-    private static void WaitKey() => Console.ReadKey(intercept: true);
+    private static void WaitKey() => UiInput.ReadKey();
 
     private void Draw(IBrowserSource source, IReadOnlyList<BrowserItem> items)
     {
@@ -169,7 +169,8 @@ public sealed class SelectionBrowser(string standHeader, IReadOnlyList<IBrowserS
         var head = new List<Seg>();
         for (int i = 0; i < tabs.Count; i++)
         {
-            head.Add(i == _tab ? new Seg($" {tabs[i].TabTitle} ", "black on aqua") : new Seg($" {tabs[i].TabTitle} ", "grey"));
+            // Brackets as well as colour: the active tab stays visible without colours (and in recordings).
+            head.Add(i == _tab ? new Seg($"[{tabs[i].TabTitle}]", "black on aqua") : new Seg($" {tabs[i].TabTitle} ", "grey"));
             head.Add(new Seg(" "));
         }
         head.Add(new Seg("  " + standHeader, "grey"));

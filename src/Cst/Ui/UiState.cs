@@ -19,7 +19,11 @@ public sealed class UiState
     public List<string> RecentArchives { get; set; } = [];
     public List<string> RecentWorkDirs { get; set; } = [];
 
-    private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNameCaseInsensitive = true };
+    private static readonly JsonSerializerOptions Json = new()
+    {
+        WriteIndented = true, PropertyNameCaseInsensitive = true,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping // "dev->test", not "dev->test"
+    };
 
     public static string PathNextTo(string settingsPath) =>
         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(settingsPath)) ?? AppContext.BaseDirectory, FileName);

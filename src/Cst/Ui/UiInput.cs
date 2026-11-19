@@ -3,7 +3,10 @@ using Spectre.Console;
 
 namespace Cst.Ui;
 
-/// <summary>Small console input helpers the Spectre prompts do not cover.</summary>
+/// <summary>
+/// Console input and size for the UI. Everything goes through <see cref="AnsiConsole.Console"/>, so a scripted
+/// console (tests\Cst.UiScenario) can drive the UI with prepared keys and record what it draws.
+/// </summary>
 public static class UiInput
 {
     /// <summary>
@@ -18,6 +21,31 @@ public static class UiInput
         catch (IOException) { return false; }
     }
 
+    /// <summary>True when the UI draws into the real console window (not a scripted/recording console).</summary>
+    public static bool IsRealConsole => AnsiConsole.Profile.Out.IsTerminal;
+
+    public static int Width
+    {
+        get
+        {
+            if (!IsRealConsole) return AnsiConsole.Profile.Width;
+            try { return Console.WindowWidth; } catch (IOException) { return 100; }
+        }
+    }
+
+    public static int Height
+    {
+        get
+        {
+            if (!IsRealConsole) return AnsiConsole.Profile.Height;
+            try { return Console.WindowHeight; } catch (IOException) { return 30; }
+        }
+    }
+
+    /// <summary>Reads one key without echo.</summary>
+    public static ConsoleKeyInfo ReadKey() =>
+        AnsiConsole.Console.Input.ReadKey(intercept: true) ?? throw new EndOfStreamException("No more console input.");
+
     /// <summary>Reads a password without echo (shows '*'). Esc returns null; Enter on empty input returns "".</summary>
     public static string? ReadSecret(string prompt)
     {
@@ -25,20 +53,20 @@ public static class UiInput
         var sb = new StringBuilder();
         while (true)
         {
-            var k = Console.ReadKey(intercept: true);
+            var k = ReadKey();
             switch (k.Key)
             {
                 case ConsoleKey.Enter:
-                    Console.WriteLine();
+                    AnsiConsole.WriteLine();
                     return sb.ToString();
                 case ConsoleKey.Escape:
-                    Console.WriteLine();
+                    AnsiConsole.WriteLine();
                     return null;
                 case ConsoleKey.Backspace:
-                    if (sb.Length > 0) { sb.Length--; Console.Write("\b \b"); }
+                    if (sb.Length > 0) { sb.Length--; AnsiConsole.Write("\b \b"); }
                     break;
                 default:
-                    if (!char.IsControl(k.KeyChar)) { sb.Append(k.KeyChar); Console.Write('*'); }
+                    if (!char.IsControl(k.KeyChar)) { sb.Append(k.KeyChar); AnsiConsole.Write("*"); }
                     break;
             }
         }
@@ -48,6 +76,6 @@ public static class UiInput
     public static void Pause(string text = "Press any key to continue...")
     {
         AnsiConsole.MarkupLine($"[grey]{Markup.Escape(text)}[/]");
-        Console.ReadKey(intercept: true);
+        ReadKey();
     }
 }

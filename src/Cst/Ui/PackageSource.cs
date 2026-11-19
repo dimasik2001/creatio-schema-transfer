@@ -148,6 +148,26 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         }
     }
 
+    /// <summary>Every selected element as element sections, whole packages included (for the reference analysis).</summary>
+    public List<SchemaListPackage> SelectedAsLists() =>
+        _selected.Where(x => x.Value.Count > 0).OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase).Select(x =>
+        {
+            var all = _elements[x.Key];
+            var name = Package(x.Key).Name;
+            var chosen = all.Where(e => x.Value.Contains((e.Kind, e.UId))).Select(e => (e.Name, e.Kind));
+            return SchemaList.Build(name, name, chosen, all.Select(e => (e.Name, e.Kind)));
+        }).ToList();
+
+    /// <summary>Adds one element (found by package, kind and UId) to the selection; false when the package does not have it.</summary>
+    public async Task<bool> SelectAsync(string package, ItemKind kind, Guid uId)
+    {
+        if (!packages.Any(p => p.Name.Equals(package, StringComparison.OrdinalIgnoreCase))) return false;
+        var all = await ElementsAsync(package);
+        if (!all.Any(e => e.Kind == kind && e.UId == uId)) return false;
+        Selected(package).Add((kind, uId));
+        return true;
+    }
+
     /// <summary>
     /// The selection for the list: packages marked as a whole (every element selected) go to the packages:
     /// section (Creatio zip install); the rest become element sections (target = source until mapped), with type

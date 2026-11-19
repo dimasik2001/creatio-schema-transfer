@@ -1,0 +1,28 @@
+# Run after export-map-save.keys (same settings folder): the dev->test mapping comes back as "(remembered)".
+Enter                 # Export
+Enter                 # dev (last used, first in the list)
+text:utkcst
+Enter
+Space                 # Objects
+Esc
+F2
+wait:summary
+Down                  # Mapping… (Check, Mapping, ...)
+Enter
+Enter                 # test
+wait:mapping list (remembered)
+Enter                 # Done
+wait:summary with remembered mapping
+Down
+Down
+Down
+Down
+Down
+Down                  # Menu
+Enter
+text:y
+Enter
+Down
+Down
+Down
+Enter                 # Quit

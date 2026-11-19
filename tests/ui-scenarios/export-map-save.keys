@@ -1,0 +1,54 @@
+# Export from dev with mapping to test, adding a referenced element, saving the list and writing the archive.
+Enter                 # main menu: Export
+Enter                 # dev
+text:utkcst
+Enter                 # open UtkCstSource
+Space                 # Objects
+Space                 # Source code
+Down                  # skip User tasks
+Space                 # Business processes
+Esc
+F2                    # summary
+Enter                 # Check references
+wait:checked (UtkCstUserTask referenced)
+Down                  # Add…
+Enter
+Enter                 # add the preselected references
+wait:after add (selection changed since the check)
+Down                  # Mapping… (Check, Mapping, Save, ...)
+Enter
+wait:target stand
+Enter                 # test (the only target besides dev)
+wait:mapping list
+Down                  # UtkCstSource (Done is the first item)
+Enter
+text:UtkCstTarget     # search
+Enter
+wait:mapped
+Enter                 # Done
+wait:summary with mapping
+Down
+Down                  # Save
+Enter
+Enter                 # default path
+wait:saved (with the warning)
+Enter                 # pause
+Down
+Down
+Down                  # Export
+Enter
+Enter                 # default path
+wait:exported (downloads again, with the warning)
+Enter                 # pause
+Down
+Down
+Down
+Down
+Down
+Down                  # Menu
+Enter
+wait:main menu
+Down
+Down
+Down
+Enter                 # Quit

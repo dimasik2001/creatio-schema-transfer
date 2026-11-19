@@ -1,0 +1,62 @@
+# Export from dev: selection, the summary without a reference check (warning), Check references, the session
+# package cache on a second check, the "selection changed" warning, leaving without saving.
+Enter                 # main menu: Export
+wait:stand list
+Enter                 # first stand (dev)
+wait:packages tab
+text:utkcst           # filter -> UtkCstSource
+Enter                 # open it
+Space                 # Objects (cursor moves down)
+Space                 # Source code
+Down                  # skip User tasks
+Space                 # Business processes
+Esc                   # up to the packages
+Ctrl+A                # all packages
+Ctrl+A                # own packages again
+wait:files tab
+Tab
+Enter                 # open the first folder
+Space                 # mark its first item
+Tab
+F2                    # summary
+wait:summary (not checked: warning)
+Enter                 # Check references
+wait:checked (UtkCstUserTask referenced)
+Down
+Down
+Down
+Down
+Down
+Down                  # Back (Check, Add, Mapping, Save, Export, Import, Back, Menu)
+Enter
+wait:selection again
+F2                    # nothing changed
+wait:summary (still checked)
+Enter                 # Check references again: packages from the session cache
+wait:checked again (cache)
+Down
+Down
+Down
+Down
+Down
+Down                  # Back
+Enter
+text:yacht
+Space                 # UtkYachtRental as a whole: the selection changes
+Esc
+F2
+wait:summary (selection changed: warning)
+Down
+Down
+Down
+Down
+Down
+Down                  # Menu (Check, Mapping, Save, Export, Import, Back, Menu)
+Enter
+text:y                # leave without saving
+Enter
+wait:main menu
+Down
+Down
+Down
+Enter                 # Quit

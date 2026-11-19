@@ -487,3 +487,5 @@ appsettings.json
 # cst: transfer archives and their reports/backups
 *.missing.md
 *_import_*/
+# cst: UI scenario runner output
+tests/Cst.UiScenario/out/
