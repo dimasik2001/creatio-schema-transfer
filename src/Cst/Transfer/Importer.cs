@@ -27,7 +27,7 @@ public sealed class ImportOptions
 public static class ImportStages
 {
     public const string Check = "Check", Packages = "Whole packages", SqlBefore = "SQL BeforePackage", Schemas = "Schemas", DbStructure = "DB structure",
-        Compile = "Compile", SqlAfter = "SQL AfterPackage", Data = "Data bindings", SqlAfterData = "SQL AfterSchemaData", Files = "Files";
+        Compile = "Compile", Content = "Client content", SqlAfter = "SQL AfterPackage", Data = "Data bindings", SqlAfterData = "SQL AfterSchemaData", Files = "Files";
 }
 
 public sealed class ImportResult
@@ -222,6 +222,14 @@ public sealed class Importer(CreatioClient client)
         foreach (var s in sqlScripts.Where(s => s.InstallType == ElementInstaller.SqlUninstallApp))
             result.Notes.Add($"{s.Item.Name} is an UninstallApp script: saved, never executed by cst.");
 
+        // What to build after the schemas: compile only when a schema produces C#; client modules need only their
+        // client content regenerated (no compilation, no app restart); SQL/data/files need nothing. --rebuild forces it.
+        var (compileKind, compileReasons) = CompileNeed.Decide(schemas.Select(s => (s.Name, s.Manager)), whole.Select(w => (w.Name, w.NeedsCompile)));
+        if (options.FullRebuild && compileKind != CompileKind.None) (compileKind, compileReasons) = (CompileKind.Compile, ["--rebuild"]);
+        var compileText = options.NoCompile && compileKind != CompileKind.None
+            ? "build: skipped (--no-compile)" : "build: " + CompileNeed.Describe(compileKind, compileReasons);
+        if (!options.DryRun) result.Notes.Add(char.ToUpperInvariant(compileText[0]) + compileText.Substring(1) + ".");
+
         if (options.DryRun)
         {
             Log.Info($"Dry run (target DB engine {DbEngineName(dbEngine)}). Planned steps:");
@@ -233,6 +241,7 @@ public sealed class Importer(CreatioClient client)
             foreach (var (phase, label) in new[] { (ElementInstaller.SqlBeforePackage, "SQL BeforePackage") })
                 foreach (var s in sqlScripts.Where(s => s.InstallType == phase)) Log.Info($"  {label}: {s.Item.Name}");
             foreach (var s in schemas) Log.Info($"  schema step {s.Order + 1}: {s.Name} ({ShortManager(s.Manager)}) → {itemTarget[s.UId].Name}");
+            Log.Info($"  {compileText}");
             foreach (var s in sqlScripts.Where(s => s.InstallType == ElementInstaller.SqlAfterPackage)) Log.Info($"  SQL AfterPackage: {s.Item.Name}");
             foreach (var d in data) Log.Info($"  data: {d.Name} → {itemTarget[d.UId].Name}");
             foreach (var s in sqlScripts.Where(s => s.InstallType == ElementInstaller.SqlAfterSchemaData)) Log.Info($"  SQL AfterSchemaData: {s.Item.Name}");
@@ -375,7 +384,14 @@ public sealed class Importer(CreatioClient client)
             }
             foreach (var t in targets.Values) result.Installed.Add(t.Name);
 
-            if (!options.NoCompile && (schemas.Count > 0 || whole.Count > 0))
+            if (!options.NoCompile && compileKind == CompileKind.ContentOnly)
+            {
+                Log.Stage(ImportStages.Content);
+                Log.Info("Regenerating client content of the changed schemas (no compilation needed)...");
+                if (await client.BuildContentAsync() is { } contentError)
+                    result.Warnings.Add($"BuildConfiguration (client content): {contentError}. Compile the configuration to regenerate it.");
+            }
+            if (!options.NoCompile && compileKind == CompileKind.Compile)
             {
                 Log.Stage(ImportStages.Compile);
                 Log.Info(options.FullRebuild ? "Compiling configuration (full rebuild)..." : "Compiling configuration...");

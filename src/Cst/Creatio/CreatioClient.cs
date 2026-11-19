@@ -419,6 +419,18 @@ public sealed class CreatioClient : IDisposable
         return json["rowsAffected"]?.GetValue<int>() ?? 0;
     }
 
+    /// <summary>
+    /// Regenerates the client (and runtime server) content of changed schemas without compiling C# and without an
+    /// application restart (WorkspaceExplorerService/BuildConfiguration). Returns an error message or null.
+    /// </summary>
+    public async Task<string?> BuildContentAsync()
+    {
+        var json = await PostJsonAsync("ServiceModel/WorkspaceExplorerService.svc/BuildConfiguration", null);
+        if (json?["success"]?.GetValue<bool>() == false)
+            return json["errorInfo"]?["message"]?.ToString() ?? json["message"]?.ToString() ?? "BuildConfiguration failed";
+        return null;
+    }
+
     /// <summary>Compiles changed configuration (WorkspaceExplorerService/Build). Returns error lines.</summary>
     public async Task<List<string>> BuildAsync(bool full)
     {

@@ -56,6 +56,8 @@ public sealed partial class Exporter(CreatioClient client)
                         UId = Guid.Parse(d["UId"]!.ToString()), Name = d["Name"]!.ToString(), PackageVersion = d["PackageVersion"]?.ToString()
                     }).ToList(),
                     Schemas = content.ElementNames(ItemKind.Schema).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
+                    NeedsCompile = content.ElementNames(ItemKind.Schema)
+                        .Any(n => CompileNeed.ManagerNeedsCompile(content.ElementDescriptor(ItemKind.Schema, n)?["ManagerName"]?.ToString())),
                     ElementUIds = new[] { ItemKind.Schema, ItemKind.SqlScript, ItemKind.Data }
                         .SelectMany(k => content.ElementNames(k).Select(n => content.ElementDescriptor(k, n)?["UId"]?.ToString()))
                         .Select(u => Guid.TryParse(u, out var g) ? g : Guid.Empty).Where(g => g != Guid.Empty).Distinct().ToList()

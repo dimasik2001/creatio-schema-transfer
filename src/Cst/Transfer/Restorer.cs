@@ -81,11 +81,22 @@ public sealed class Restorer(CreatioClient client)
             await client.InstallPackageAsync(zipName);
             r.Restored.Add($"package {name}");
         }
-        if (!noCompile && (schemaBackups.Length > 0 || sqlBackups.Length > 0 || dataBackups.Length > 0 || wholeBackups.Length > 0))
+        // Same rule as the import: compile only for schemas that produce C# (and reinstalled whole packages);
+        // client modules only need their content regenerated; SQL bodies and data need no build.
+        var (kind, _) = CompileNeed.Decide(
+            schemaBackups.Select(b => (b["name"]?.ToString() ?? "", b["manager"]?.ToString())),
+            wholeBackups.Where(b => b["existed"]?.GetValue<bool>() == true).Select(b => (b["name"]?.ToString() ?? "", (bool?)null)));
+        if (!noCompile && kind == CompileKind.Compile)
         {
             Log.Stage("Compile");
             Log.Info("Compiling configuration...");
             r.CompileErrors = await client.BuildAsync(false);
+        }
+        else if (!noCompile && kind == CompileKind.ContentOnly)
+        {
+            Log.Stage("Client content");
+            Log.Info("Regenerating client content of the restored schemas (no compilation needed)...");
+            if (await client.BuildContentAsync() is { } contentError) r.Warnings.Add($"BuildConfiguration (client content): {contentError}");
         }
         // Files last, as in import (a compilation would rewrite Terrasoft.Configuration\bin).
         if (info["fileBackups"] is JsonArray fileBackups && fileBackups.Count > 0)

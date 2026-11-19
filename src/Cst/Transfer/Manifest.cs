@@ -70,6 +70,8 @@ public sealed class ManifestWholePackage
     public List<string> Schemas { get; set; } = [];
     /// <summary>UIds of every schema, SQL script and data binding in the package (to find them in other target packages).</summary>
     public List<Guid> ElementUIds { get; set; } = [];
+    /// <summary>The package has schemas that produce C# (see <see cref="CompileNeed"/>); null in older archives = assume yes.</summary>
+    public bool? NeedsCompile { get; set; }
 }
 
 public sealed class Manifest
