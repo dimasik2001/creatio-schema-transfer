@@ -24,10 +24,13 @@ public sealed class SchemaListPackage
 /// package LVBase -> UsrBase:
 ///  - SchemaName
 ///  - SomeBinding [data]
+/// packages:
+///  - WholePackage
 /// files:
 ///  - Terrasoft.WebApp\Terrasoft.Configuration\bin\Terrasoft.Configuration.dll
 /// </code>
-/// The files section needs the environment's root folder (Path).
+/// The files section needs the environment's root folder (Path). The packages section transfers whole packages
+/// through Creatio's zip installer.
 /// Also accepts the command-line form "LVBase->UsrBase:A,B;LVJS:C".
 /// </summary>
 public static partial class SchemaList
@@ -44,32 +47,57 @@ public static partial class SchemaList
     private static readonly Regex _fileEntryLine = new(@"^-\s*(?<path>.+?)\s*$");
     private static Regex FileEntryLine() => _fileEntryLine;
 
+    private static readonly Regex _wholeLine = new(@"^packages\s*:\s*$", RegexOptions.IgnoreCase);
+    private static readonly Regex _wholeEntryLine = new(@"^-\s*(?<name>[\w.]+)\s*$");
+
     public static List<SchemaListPackage> ParseFile(string path) => Parse(File.ReadAllLines(path), path);
 
     /// <summary>Entries of the `files:` section (paths relative to the Creatio root folder).</summary>
     public static List<string> ParseFilesSection(string path)
     {
         var files = new List<string>();
-        ParseCore(File.ReadAllLines(path), path, files);
+        ParseCore(File.ReadAllLines(path), path, files, null);
         return files;
     }
 
-    public static List<SchemaListPackage> Parse(IEnumerable<string> lines, string source = "<input>") => ParseCore(lines, source, null);
+    /// <summary>
+    /// Entries of the `packages:` section: packages transferred as a whole, the way Creatio installs a package
+    /// (zip installer: the package is replaced on the target, created when missing). No mapping.
+    /// </summary>
+    public static List<string> ParseWholePackagesSection(string path) => ParseWholePackages(File.ReadAllLines(path), path);
 
-    private static List<SchemaListPackage> ParseCore(IEnumerable<string> lines, string source, List<string>? files)
+    public static List<string> ParseWholePackages(IEnumerable<string> lines, string source = "<input>")
+    {
+        var whole = new List<string>();
+        ParseCore(lines, source, null, whole);
+        return whole;
+    }
+
+    public static List<SchemaListPackage> Parse(IEnumerable<string> lines, string source = "<input>") => ParseCore(lines, source, null, null);
+
+    private static List<SchemaListPackage> ParseCore(IEnumerable<string> lines, string source, List<string>? files, List<string>? whole)
     {
         var result = new List<SchemaListPackage>();
         SchemaListPackage? current = null;
-        bool inFiles = false;
+        bool inFiles = false, inWhole = false;
         int n = 0;
         foreach (var raw in lines)
         {
             n++;
             var line = StripComment(raw).Trim();
             if (line.Length == 0) continue;
-            if (FilesLine().IsMatch(line)) { inFiles = true; current = null; continue; }
+            if (FilesLine().IsMatch(line)) { inFiles = true; inWhole = false; current = null; continue; }
+            if (_wholeLine.IsMatch(line)) { inWhole = true; inFiles = false; current = null; continue; }
             var pm = PackageLine().Match(line);
-            if (pm.Success) inFiles = false;
+            if (pm.Success) inFiles = inWhole = false;
+            if (inWhole)
+            {
+                var wm = _wholeEntryLine.Match(line);
+                if (!wm.Success) throw new FormatException($"{source}:{n}: expected ' - <PackageName>' in the packages section (no mapping, no type), got '{raw.Trim()}'.");
+                var name = wm.Groups["name"].Value;
+                if (whole != null && !whole.Contains(name, StringComparer.OrdinalIgnoreCase)) whole.Add(name);
+                continue;
+            }
             if (inFiles)
             {
                 var fm = FileEntryLine().Match(line);
@@ -162,10 +190,22 @@ public static partial class SchemaList
     }
 
     /// <summary>Writes the list in the format <see cref="ParseFile"/> reads (package sections, then a files section).</summary>
-    public static string Write(IEnumerable<SchemaListPackage> packages, IEnumerable<string>? files = null, IEnumerable<string>? headerComments = null)
+    public static string Write(IEnumerable<SchemaListPackage> packages, IEnumerable<string>? files = null, IEnumerable<string>? headerComments = null,
+        IEnumerable<string>? wholePackages = null)
     {
         var sb = new System.Text.StringBuilder();
         foreach (var c in headerComments ?? []) sb.Append("# ").AppendLine(c);
+        var wholeList = wholePackages?.ToList() ?? [];
+        if (wholeList.Count > 0)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.AppendLine("packages:");
+            foreach (var w in wholeList)
+            {
+                if (!_wholeEntryLine.IsMatch($"- {w}")) throw new FormatException($"Package name '{w}' cannot be written to a schema list.");
+                sb.Append(" - ").AppendLine(w);
+            }
+        }
         foreach (var p in packages.Where(p => p.Entries.Count > 0))
         {
             if (sb.Length > 0) sb.AppendLine();

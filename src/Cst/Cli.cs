@@ -37,6 +37,9 @@ static class Cli
 
         Schema list format:
           # comment
+          packages:                      (whole packages, installed first by Creatio's zip installer: the package
+           - UsrWholePackage              is replaced on the target or created; no mapping; stops before installing
+                                          if the target package has locally modified elements)
           package LVBase -> UsrBase:
            - SchemaName
            - SomeDataBinding [data]     (optional type: [schema] [sql] [data])
@@ -104,11 +107,15 @@ static class Cli
     {
         var list = new List<SchemaListPackage>();
         var files = new List<string>();
-        if (a.Value("config") is { } cfg) { list = SchemaList.ParseFile(cfg); files = SchemaList.ParseFilesSection(cfg); }
+        var whole = new List<string>();
+        if (a.Value("config") is { } cfg)
+        {
+            list = SchemaList.ParseFile(cfg); files = SchemaList.ParseFilesSection(cfg); whole = SchemaList.ParseWholePackagesSection(cfg);
+        }
         if (a.Value("schemas") is { } inline) SchemaList.Merge(list, SchemaList.ParseInline(inline));
         var output = a.Required("out");
         using var client = await ConnectAsync(a);
-        var manifest = await new Exporter(client).ExportAsync(list, output, files);
+        var manifest = await new Exporter(client).ExportAsync(list, output, files, whole);
 
         if (json) { PrintJson(new { ok = true, archive = Path.GetFullPath(output), manifest }); return 0; }
         PrintPlan(manifest);
@@ -363,8 +370,20 @@ static class Cli
                 b["previousBody"]?.ToString() ?? "", b["installType"]!.GetValue<int>(), b["dbEngineType"]!.GetValue<int>(), [], false);
             restored.Add($"SQL {b["name"]}");
         }
+        // Whole packages last (they were installed first): reinstall the backed-up package zip.
+        var wholeBackups = Arr("wholeBackups");
+        foreach (var b in Enumerable.Reverse(wholeBackups))
+        {
+            var name = b["name"]!.ToString();
+            if (b["existed"]?.GetValue<bool>() != true || b["file"] is null) { leftovers.Add($"package {name} (created by the zip install)"); continue; }
+            Log.Info($"[{name}] reinstalling the backed-up package (zip installer)...");
+            var zipName = $"cst_restore_{DateTime.Now:yyyyMMdd_HHmmss}_{name}.zip";
+            await client.UploadPackageAsync(zipName, File.ReadAllBytes(Path.Combine(dir, b["file"]!.ToString())));
+            await client.InstallPackageAsync(zipName);
+            restored.Add($"package {name}");
+        }
         var errors = new List<string>();
-        if (!a.Flag("no-compile") && (schemaBackups.Length > 0 || sqlBackups.Length > 0 || dataBackups.Length > 0))
+        if (!a.Flag("no-compile") && (schemaBackups.Length > 0 || sqlBackups.Length > 0 || dataBackups.Length > 0 || wholeBackups.Length > 0))
         {
             Log.Info("Compiling configuration...");
             errors = await client.BuildAsync(false);
@@ -394,6 +413,12 @@ static class Cli
     static void PrintPlan(Manifest m)
     {
         Console.WriteLine($"Source: {m.SourceUrl}, created {m.CreatedUtc:u}");
+        if (m.WholePackages.Count > 0)
+        {
+            Console.WriteLine("Whole packages (Creatio zip installer, installed first; replace the package on the target):");
+            foreach (var w in m.WholePackages)
+                Console.WriteLine($"  {w.Name} {w.Version}  ({w.Schemas.Count} schemas{(w.DependsOn.Count == 0 ? "" : "; depends on " + string.Join(", ", w.DependsOn.Select(d => d.Name)))})");
+        }
         Console.WriteLine("Packages (install order):");
         foreach (var p in m.Packages) Console.WriteLine($"  {p.Order + 1}. {p.Source}" + (p.Source == p.Target ? "" : $" → {p.Target}"));
         Console.WriteLine("Elements (install order; equal numbers are one dependency cycle):");

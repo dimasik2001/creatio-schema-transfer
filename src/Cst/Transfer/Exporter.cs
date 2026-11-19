@@ -11,15 +11,58 @@ public sealed partial class Exporter(CreatioClient client)
     private static readonly Regex _guidRegex = new(@"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
     private static Regex GuidRegex() => _guidRegex;
 
-    public async Task<Manifest> ExportAsync(List<SchemaListPackage> list, string outPath, List<string>? fileEntries = null)
+    public async Task<Manifest> ExportAsync(List<SchemaListPackage> list, string outPath, List<string>? fileEntries = null,
+        List<string>? wholePackages = null)
     {
         fileEntries ??= [];
+        wholePackages ??= [];
         list = list.Where(p => p.Entries.Count > 0).ToList();
-        if (list.Count == 0 && fileEntries.Count == 0)
+        if (list.Count == 0 && fileEntries.Count == 0 && wholePackages.Count == 0)
             throw new ArgumentException("The schema list is empty.");
 
         var manifest = new Manifest { SourceUrl = client.Url };
         var errors = new List<string>();
+
+        // Whole packages (packages: section): the package zip exactly as Creatio exports it.
+        byte[]? wholeZip = null;
+        if (wholePackages.Count > 0)
+        {
+            foreach (var both in list.Where(p => wholePackages.Contains(p.Source, StringComparer.OrdinalIgnoreCase)))
+                errors.Add($"Package {both.Source} is in the packages: section (whole package) and also lists single elements; keep one.");
+            var onSource = (await new Catalog(client).LoadPackagesAsync())
+                .GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            var names = new List<string>();
+            foreach (var w in wholePackages)
+            {
+                if (onSource.TryGetValue(w, out var p)) names.Add(p.Name);
+                else errors.Add($"Package {w} (packages: section) does not exist on the source environment.");
+            }
+            if (errors.Count > 0) throw new TransferException(errors);
+            Log.Info($"Downloading whole packages from {client.Url}: {string.Join(", ", names)}");
+            wholeZip = await client.GetZipPackagesAsync(names);
+            var contents = PackageGz.ReadZip(wholeZip);
+            foreach (var name in names)
+            {
+                if (!contents.TryGetValue(name, out var content)) { errors.Add($"Package {name} was not returned by the source environment."); continue; }
+                var pd = content.PackageDescriptor() ?? throw new InvalidDataException($"{name}: descriptor.json is missing.");
+                manifest.WholePackages.Add(new ManifestWholePackage
+                {
+                    Name = name,
+                    UId = Guid.Parse(pd["UId"]!.ToString()),
+                    Version = pd["PackageVersion"]?.ToString(),
+                    Maintainer = pd["Maintainer"]?.ToString(),
+                    DependsOn = (pd["DependsOn"] as JsonArray ?? []).OfType<JsonObject>().Select(d => new PackageRef
+                    {
+                        UId = Guid.Parse(d["UId"]!.ToString()), Name = d["Name"]!.ToString(), PackageVersion = d["PackageVersion"]?.ToString()
+                    }).ToList(),
+                    Schemas = content.ElementNames(ItemKind.Schema).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(),
+                    ElementUIds = new[] { ItemKind.Schema, ItemKind.SqlScript, ItemKind.Data }
+                        .SelectMany(k => content.ElementNames(k).Select(n => content.ElementDescriptor(k, n)?["UId"]?.ToString()))
+                        .Select(u => Guid.TryParse(u, out var g) ? g : Guid.Empty).Where(g => g != Guid.Empty).Distinct().ToList()
+                });
+            }
+            if (errors.Count > 0) throw new TransferException(errors);
+        }
 
         // Files of the Creatio folder (files: section): need the source environment's root folder.
         Dictionary<string, byte[]>? fileBytes = null;
@@ -39,7 +82,9 @@ public sealed partial class Exporter(CreatioClient client)
         ComputeOrder(manifest);
         var exports = await ExportSchemaFilesAsync(manifest);
 
-        TransferArchive.Write(outPath, manifest, sources, exports, fileBytes);
+        var extra = fileBytes ?? new Dictionary<string, byte[]>();
+        if (wholeZip != null) extra[Manifest.WholePackagesEntry] = wholeZip;
+        TransferArchive.Write(outPath, manifest, sources, exports, extra);
         Log.Info($"Archive written: {Path.GetFullPath(outPath)}");
         return manifest;
     }

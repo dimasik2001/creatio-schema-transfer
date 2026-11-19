@@ -77,7 +77,10 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
         var path = string.IsNullOrWhiteSpace(e.Path) ? "" : " · [green]files[/]";
         var connected = _sessions.ContainsKey(name) ? " [green]●[/]" : "";
         var line = $"[bold]{Markup.Escape(name)}[/]{connected}  [grey]{Markup.Escape(e.Url)}[/] · {db}{path}";
-        return purpose == StandPurpose.Target && !HasDbEngine(e, out _) ? $"[grey]{Markup.Remove(line)}[/] [red](no DbEngine)[/]" : line;
+        if (purpose == StandPurpose.Target && !HasDbEngine(e, out _)) line = $"[grey]{Markup.Escape(Markup.Remove(line))}[/] [red](no DbEngine)[/]";
+        // A wrapped choice breaks the prompt's redraw: fall back to plain text cut to the window width.
+        var plain = Markup.Remove(line);
+        return plain.Length > UiApp.Fit(plain).Length ? Markup.Escape(UiApp.Fit(plain)) : line;
     }
 
     private static bool HasDbEngine(EnvironmentSettings e, out string why)

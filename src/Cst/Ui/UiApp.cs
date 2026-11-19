@@ -1,5 +1,6 @@
 using System.Text;
 using Cst.Config;
+using Cst.Creatio;
 using Spectre.Console;
 
 namespace Cst.Ui;
@@ -74,9 +75,9 @@ public sealed class UiApp
                 .Title("What do you want to do?")
                 .UseConverter(c => c switch
                 {
-                    Export => "Export    [grey]select schemas and files on a stand, save a list or an archive[/]",
-                    Import => "Import    [grey]install an archive or a list into a stand[/]",
-                    Restore => "Restore   [grey]roll a stand back from an import's backup folder[/]",
+                    Export => MenuLine("Export", "select schemas and files, save a list or an archive"),
+                    Import => MenuLine("Import", "install an archive or a list into a stand"),
+                    Restore => MenuLine("Restore", "roll a stand back from an import's backup"),
                     _ => "Quit"
                 })
                 .AddChoices(Export, Import, Restore, Quit));
@@ -103,6 +104,29 @@ public sealed class UiApp
         }
     }
 
+    /// <summary>
+    /// A menu choice that never wraps: a wrapped line breaks the prompt's redraw (the menu is printed again
+    /// below itself in narrow windows). The grey description is cut to the window width.
+    /// </summary>
+    public static string MenuLine(string name, string description)
+    {
+        int width;
+        try { width = Console.WindowWidth; } catch (IOException) { width = 80; }
+        int room = width - 2 /* "> " */ - 10 /* name column */ - 2;
+        if (room < 8) return Markup.Escape(name);
+        if (description.Length > room) description = description.Substring(0, room - 1) + "…";
+        return $"{Markup.Escape(name.PadRight(10))}[grey]{Markup.Escape(description)}[/]";
+    }
+
+    /// <summary>Cuts plain text to fit one console line (for prompt choices and titles).</summary>
+    public static string Fit(string text, int reserve = 4)
+    {
+        int width;
+        try { width = Console.WindowWidth; } catch (IOException) { width = 80; }
+        int room = Math.Max(10, width - reserve);
+        return text.Length <= room ? text : text.Substring(0, room - 1) + "…";
+    }
+
     private void Title()
     {
         AnsiConsole.Write(new Rule("[bold]cst[/] [grey]· Creatio Schema Transfer[/]").LeftJustified());
@@ -124,10 +148,28 @@ public sealed class UiApp
         var source = await _envs.PickAsync(StandPurpose.Source, "Export from which stand?");
         if (source == null) return;
         Header(source, "Export");
-        AnsiConsole.MarkupLine(source.HasPath
-            ? "Tabs: [bold]Packages[/] · [bold]Files[/]"
-            : "Tabs: [bold]Packages[/] [grey](no \"Path\" for this stand: no Files tab)[/]");
-        NotYet("Selecting packages and files");
+        var catalog = new Catalog(source.Client);
+        List<PackageInfo> packages = [];
+        await AnsiConsole.Status().StartAsync("Loading packages...", async _ => packages = await catalog.LoadPackagesAsync());
+
+        var packageTab = new PackageSource(catalog, packages);
+        var tabs = new List<IBrowserSource> { packageTab };
+        FileSource? fileTab = source.HasPath ? new FileSource(source.Settings.Path!) : null;
+        if (fileTab != null) tabs.Add(fileTab);
+
+        while (true)
+        {
+            var result = await new SelectionBrowser(source.Header, tabs).RunAsync();
+            if (result == BrowserResult.Back) return;
+
+            // Temporary summary (step 5 replaces it with the real one: mapping, references, save/export/import).
+            Header(source, "Export · selection");
+            var (elements, whole) = packageTab.ToSelection();
+            var text = SchemaList.Write(elements, fileTab?.Selection.Entries(), [$"cst console UI, source {source.Name}"], whole);
+            AnsiConsole.Write(new Panel(new Text(text)).Header("List preview").Expand());
+            var next = AnsiConsole.Prompt(new SelectionPrompt<string>().AddChoices("Back to selection", "Main menu"));
+            if (next == "Main menu") return;
+        }
     }
 
     private async Task ImportAsync()
