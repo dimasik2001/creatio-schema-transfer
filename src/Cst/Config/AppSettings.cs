@@ -46,9 +46,11 @@ public sealed class AppSettings
 
     /// <summary>
     /// Resolves an environment from --env plus overrides (--url, --login, --password).
-    /// The password may also come from CST_PASSWORD or CST_PASSWORD_&lt;ENV&gt;.
+    /// The password may also come from CST_PASSWORD or CST_PASSWORD_&lt;ENV&gt;; when it is still empty,
+    /// <paramref name="askPassword"/> (if given) is asked with the environment name (null without --env).
     /// </summary>
-    public EnvironmentSettings Resolve(string? envName, string? url, string? login, string? password, string? dbEngine = null, string? root = null)
+    public EnvironmentSettings Resolve(string? envName, string? url, string? login, string? password, string? dbEngine = null, string? root = null,
+        Func<string?, string?>? askPassword = null)
     {
         EnvironmentSettings env;
         if (envName != null)
@@ -76,6 +78,7 @@ public sealed class AppSettings
         }
         if (string.IsNullOrEmpty(env.Url)) throw new ArgumentException("Environment URL is not set (use --env or --url).");
         if (string.IsNullOrEmpty(env.Login)) throw new ArgumentException("Login is not set.");
+        if (string.IsNullOrEmpty(env.Password) && askPassword != null) env.Password = askPassword(envName) ?? "";
         if (string.IsNullOrEmpty(env.Password)) throw new ArgumentException("Password is not set (appsettings.json, --password or CST_PASSWORD).");
         return env;
     }

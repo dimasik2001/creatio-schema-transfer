@@ -152,23 +152,15 @@ static class Cli
 
     /// <summary>
     /// Read-only: downloads each target package and reports, per data binding in the archive, whether the target
-    /// already has a binding of the same Name — and whether its UId matches. A same-name binding with a DIFFERENT
-    /// UId is what makes the binding SQL fail ("the package already has a data binding named X with another UId").
-    ///   cst binding-check --env &lt;e&gt; --archive x.zip
+    /// already has a binding of the same Name — and whether its UId matches. With --fix (or --on-conflict) writes a
+    /// resolved copy of the archive.
+    ///   cst binding-check --env &lt;e&gt; --archive x.zip [--fix] [--on-conflict uid|skip|rename] [--out resolved.zip]
     /// </summary>
-    private sealed class BindingFix
-    {
-        public string Pkg = "", Name = "", Action = "";
-        public string? NewName;
-        public Guid? TargetUId;
-    }
-
     static async Task<int> BindingCheckAsync(Args a)
     {
         var archive = a.Required("archive");
         var (manifest, _) = TransferArchive.Read(archive);
-        var dataItems = manifest.Items.Where(i => i.Kind == ItemKind.Data).ToList();
-        if (dataItems.Count == 0) { Console.WriteLine("No data bindings in the archive."); return 0; }
+        if (!manifest.Items.Any(i => i.Kind == ItemKind.Data)) { Console.WriteLine("No data bindings in the archive."); return 0; }
         bool fix = a.Flag("fix");
         var auto = a.Value("on-conflict")?.Trim().ToLowerInvariant(); // uid | skip | rename (non-interactive)
         if (auto != null) { fix = true; if (auto is not ("uid" or "skip" or "rename")) { Log.Error("--on-conflict must be uid, skip or rename."); return 1; } }
@@ -178,38 +170,38 @@ static class Cli
             return 1;
         }
         using var client = await ConnectAsync(a);
+        var rows = await BindingCheck.CheckAsync(client, manifest);
         int conflicts = 0;
-        var fixes = new Dictionary<string, BindingFix>();
-        foreach (var g in dataItems.GroupBy(i => i.TargetPackage, StringComparer.OrdinalIgnoreCase))
+        var fixes = new List<BindingFix>();
+        foreach (var g in rows.GroupBy(r => r.Item.TargetPackage, StringComparer.OrdinalIgnoreCase))
         {
             Console.WriteLine($"Package {g.Key}:");
-            PackageContent content;
-            try { content = PackageGz.ReadZip(await client.GetZipPackagesAsync([g.Key])).GetValueOrDefault(g.Key) ?? new PackageContent(); }
-            catch (Exception ex) { Console.WriteLine($"  cannot download package: {ex.Message}"); continue; }
-            var targetByName = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var n in content.ElementNames(ItemKind.Data))
-                targetByName[n] = content.ElementDescriptor(ItemKind.Data, n)?["UId"]?.ToString();
-            foreach (var item in g)
+            if (g.All(r => r.State == BindingState.Unavailable) && g.First().Error is { } err)
             {
-                if (!targetByName.TryGetValue(item.Name, out var tUId) || tUId == null)
-                    Console.WriteLine($"  NEW       {item.Name}");
-                else if (Guid.TryParse(tUId, out var gu) && gu == item.UId)
-                    Console.WriteLine($"  ok        {item.Name}  (same UId, will update)");
-                else
+                Console.WriteLine($"  cannot download package: {err}");
+                continue;
+            }
+            foreach (var r in g)
+            {
+                var item = r.Item;
+                switch (r.State)
                 {
-                    Console.WriteLine($"  CONFLICT  {item.Name}  target UId {tUId}  !=  archive UId {item.UId}");
-                    conflicts++;
-                    if (fix && Guid.TryParse(tUId, out var targetUId))
-                    {
+                    case BindingState.New: Console.WriteLine($"  NEW       {item.Name}"); break;
+                    case BindingState.Same: Console.WriteLine($"  ok        {item.Name}  (same UId, will update)"); break;
+                    case BindingState.Unavailable: Console.WriteLine($"  ?         {item.Name}  {r.Error}"); break;
+                    case BindingState.Conflict:
+                        Console.WriteLine($"  CONFLICT  {item.Name}  target UId {r.TargetUId}  !=  archive UId {item.UId}");
+                        conflicts++;
+                        if (!fix) break;
                         var f = auto switch
                         {
-                            "uid" => new BindingFix { Pkg = item.SourcePackage, Name = item.Name, Action = "uid", TargetUId = targetUId },
-                            "skip" => new BindingFix { Pkg = item.SourcePackage, Name = item.Name, Action = "skip" },
-                            "rename" => new BindingFix { Pkg = item.SourcePackage, Name = item.Name, Action = "rename", NewName = item.Name + "_resolved" },
-                            _ => PromptBindingFix(item.SourcePackage, item.Name, targetUId, item.UId)
+                            "uid" => new BindingFix { Package = item.SourcePackage, Name = item.Name, Action = BindingFixAction.UseTargetUId, TargetUId = r.TargetUId },
+                            "skip" => new BindingFix { Package = item.SourcePackage, Name = item.Name, Action = BindingFixAction.Skip },
+                            "rename" => new BindingFix { Package = item.SourcePackage, Name = item.Name, Action = BindingFixAction.Rename, NewName = BindingFix.DefaultRename(item.Name) },
+                            _ => PromptBindingFix(item.SourcePackage, item.Name, r.TargetUId!.Value)
                         };
-                        if (f != null) fixes[item.SourcePackage + "\u0000" + item.Name] = f;
-                    }
+                        if (f != null) fixes.Add(f);
+                        break;
                 }
             }
         }
@@ -232,14 +224,14 @@ static class Cli
         }
         var outPath = a.Value("out") ?? Path.Combine(Path.GetDirectoryName(Path.GetFullPath(archive))!,
             Path.GetFileNameWithoutExtension(archive) + "-resolved.zip");
-        WriteResolvedArchive(archive, outPath, manifest, fixes);
+        BindingCheck.WriteResolvedArchive(archive, outPath, fixes);
         Console.WriteLine($"Resolved archive written: {outPath}");
         Console.WriteLine("Review it, then: cst import --env <e> --archive \"" + outPath + "\"");
         return 0;
     }
 
     /// <summary>Asks, on the console, how to resolve one binding conflict. Returns null to leave it unresolved.</summary>
-    static BindingFix? PromptBindingFix(string pkg, string name, Guid targetUId, Guid archiveUId)
+    static BindingFix? PromptBindingFix(string pkg, string name, Guid targetUId)
     {
         while (true)
         {
@@ -250,84 +242,18 @@ static class Cli
             Console.Error.Write("  Resolve this conflict [R/U/S/K]: ");
             switch (Console.ReadLine()?.Trim().ToLowerInvariant())
             {
-                case "u" or "use" or "uid": return new BindingFix { Pkg = pkg, Name = name, Action = "uid", TargetUId = targetUId };
-                case "s" or "skip": return new BindingFix { Pkg = pkg, Name = name, Action = "skip" };
+                case "u" or "use" or "uid": return new BindingFix { Package = pkg, Name = name, Action = BindingFixAction.UseTargetUId, TargetUId = targetUId };
+                case "s" or "skip": return new BindingFix { Package = pkg, Name = name, Action = BindingFixAction.Skip };
                 case "k" or "keep" or "" or null: return null;
                 case "r" or "rename":
                     Console.Error.Write("  New name (empty to cancel): ");
                     var nn = Console.ReadLine()?.Trim();
                     if (string.IsNullOrEmpty(nn)) continue;
                     if (string.Equals(nn, name, StringComparison.OrdinalIgnoreCase)) { Console.Error.WriteLine("  Same name; pick another."); continue; }
-                    return new BindingFix { Pkg = pkg, Name = name, Action = "rename", NewName = nn };
+                    return new BindingFix { Package = pkg, Name = name, Action = BindingFixAction.Rename, NewName = nn };
                 default: Console.Error.WriteLine("  Answer R, U, S or K."); continue;
             }
         }
-    }
-
-    /// <summary>Copies the archive applying the chosen fixes: rename a data binding, adopt the target UId, or drop it.</summary>
-    static void WriteResolvedArchive(string src, string dst, Manifest manifest, Dictionary<string, BindingFix> fixes)
-    {
-        // Patch the typed manifest.
-        var remove = new List<ManifestItem>();
-        foreach (var f in fixes.Values)
-        {
-            var item = manifest.Items.FirstOrDefault(i => i.Kind == ItemKind.Data
-                && i.SourcePackage.Equals(f.Pkg, StringComparison.OrdinalIgnoreCase)
-                && i.Name.Equals(f.Name, StringComparison.OrdinalIgnoreCase));
-            if (item == null) continue;
-            switch (f.Action)
-            {
-                case "skip": remove.Add(item); break;
-                case "uid": item.UId = f.TargetUId!.Value; break;
-                case "rename":
-                    var oldP = $"Data/{item.Name}/"; var newP = $"Data/{f.NewName}/";
-                    item.Files = item.Files.Select(p => p.StartsWith(oldP, StringComparison.OrdinalIgnoreCase) ? newP + p.Substring(oldP.Length) : p).ToList();
-                    item.Name = f.NewName!;
-                    break;
-            }
-        }
-        foreach (var it in remove) manifest.Items.Remove(it);
-
-        using var inZip = ZipFile.OpenRead(src);
-        using var outFs = File.Create(dst);
-        using var outZip = new ZipArchive(outFs, ZipArchiveMode.Create);
-        using (var s = outZip.CreateEntry(TransferArchive.ManifestName).Open()) JsonSerializer.Serialize(s, manifest, Manifest.Json);
-
-        foreach (var e in inZip.Entries)
-        {
-            if (e.FullName == TransferArchive.ManifestName || e.FullName.EndsWith("/")) continue;
-            byte[] bytes;
-            using (var s = e.Open()) { using var ms = new MemoryStream(); s.CopyTo(ms); bytes = ms.ToArray(); }
-            var outName = e.FullName;
-            var parts = e.FullName.Split('/');
-            if (parts.Length >= 4 && parts[0] == "packages" && parts[2] == "Data"
-                && fixes.TryGetValue(parts[1] + "\u0000" + parts[3], out var f))
-            {
-                var rest = string.Join("/", parts.Skip(4));
-                if (f.Action == "skip") continue; // drop the binding's files
-                if (f.Action == "rename")
-                {
-                    outName = $"packages/{parts[1]}/Data/{f.NewName}/{rest}";
-                    if (rest == "descriptor.json") bytes = PatchDataDescriptor(bytes, f.NewName, null);
-                }
-                else if (f.Action == "uid" && rest == "descriptor.json")
-                    bytes = PatchDataDescriptor(bytes, null, f.TargetUId);
-            }
-            using var os = outZip.CreateEntry(outName).Open();
-            os.Write(bytes, 0, bytes.Length);
-        }
-    }
-
-    /// <summary>Patches a data binding descriptor.json: Descriptor.Name and/or Descriptor.UId.</summary>
-    static byte[] PatchDataDescriptor(byte[] bytes, string? newName, Guid? newUId)
-    {
-        var root = JsonNode.Parse(PackageContent.DecodeText(bytes)) as JsonObject;
-        if (root?["Descriptor"] is JsonObject d)
-        {
-            if (newName != null) d["Name"] = newName;
-            if (newUId != null) d["UId"] = newUId.Value.ToString();
-        }
-        return System.Text.Encoding.UTF8.GetBytes(root?.ToJsonString() ?? "");
     }
 
     /// <summary>Diagnostics: cst call --env x --path DataService/json/SyncReply/SelectQuery --body-file q.json</summary>
@@ -509,7 +435,7 @@ static class Cli
 sealed class Args
 {
     private readonly Dictionary<string, string?> _values = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> Flags = new(StringComparer.OrdinalIgnoreCase) { "json", "verbose", "dry-run", "no-compile", "rebuild", "data-designer" };
+    private static readonly HashSet<string> Flags = new(StringComparer.OrdinalIgnoreCase) { "json", "verbose", "dry-run", "no-compile", "rebuild", "data-designer", "fix" };
 
     public static Args Parse(IEnumerable<string> argv)
     {

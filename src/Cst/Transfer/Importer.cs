@@ -15,6 +15,18 @@ public sealed class ImportOptions
     public bool DataDesigner { get; init; }
     /// <summary>Folder for backups and restore.json.</summary>
     public required string WorkDir { get; init; }
+    /// <summary>
+    /// Decides what to do when a data binding's Name already exists on the target under another UId.
+    /// Null: ask on the console (abort when the input is redirected).
+    /// </summary>
+    public Func<ElementInstaller.BindingConflict, ElementInstaller.ConflictDecision>? ResolveBindingConflict { get; init; }
+}
+
+/// <summary>Stage names reported through <see cref="Log.Stage"/> during an import, in order.</summary>
+public static class ImportStages
+{
+    public const string Check = "Check", SqlBefore = "SQL BeforePackage", Schemas = "Schemas", DbStructure = "DB structure",
+        Compile = "Compile", SqlAfter = "SQL AfterPackage", Data = "Data bindings", SqlAfterData = "SQL AfterSchemaData", Files = "Files";
 }
 
 public sealed class ImportResult
@@ -52,6 +64,7 @@ public sealed class Importer(CreatioClient client)
 
     public async Task<ImportResult> ImportAsync(string archivePath, ImportOptions options)
     {
+        Log.Stage(ImportStages.Check);
         var (manifest, sources) = TransferArchive.Read(archivePath);
         var result = new ImportResult { WorkDir = options.WorkDir };
         // From the environment's settings (DbEngine / --db-engine); checked before anything else.
@@ -164,7 +177,8 @@ public sealed class Importer(CreatioClient client)
         // Bindings: SQL path (exact copy of the source binding, binary columns included) on PostgreSQL and MSSql.
         var installer = new ElementInstaller(client, dbEngine)
         {
-            UseSqlBindings = BindingSql.Supports(dbEngine) && !options.DataDesigner, WorkDir = options.WorkDir
+            UseSqlBindings = BindingSql.Supports(dbEngine) && !options.DataDesigner, WorkDir = options.WorkDir,
+            ResolveConflict = options.ResolveBindingConflict
         };
         var ordered = manifest.Items.Where(i => itemTarget.ContainsKey(i.UId)).OrderBy(i => i.Order).ThenBy(i => i.Name).ToList();
         var sqlScripts = ordered.Where(i => i.Kind == ItemKind.SqlScript)
@@ -222,6 +236,7 @@ public sealed class Importer(CreatioClient client)
             bool SaveLate(ElementInstaller.SqlScript s) => s.DbEngineType == dbEngine && s.InstallType != ElementInstaller.SqlBeforePackage;
             if (sqlScripts.Count > 0)
             {
+                Log.Stage(ImportStages.SqlBefore);
                 var early = sqlScripts.Where(s => !SaveLate(s)).ToList();
                 Log.Info($"Saving {early.Count} SQL script(s) (BeforePackage and other DB engines)...");
                 await SaveScripts(early);
@@ -232,6 +247,7 @@ public sealed class Importer(CreatioClient client)
             // Schemas through the Configuration import, strictly in dependency order across all packages
             // (a user task before the processes that call it, a parent before its children).
             var entities = new List<Guid>();
+            if (schemas.Count > 0) Log.Stage(ImportStages.Schemas);
             foreach (var t in targets.Values)
                 await BackupSchemasAsync(t, schemas.Where(s => itemTarget[s.UId] == t).ToList(), onTarget, backupDir, restore, options);
             await SaveRestore();
@@ -278,6 +294,7 @@ public sealed class Importer(CreatioClient client)
             }
             if (entities.Count > 0)
             {
+                Log.Stage(ImportStages.DbStructure);
                 Log.Info($"Updating DB structure of {entities.Count} entity schema(s)...");
                 var msg = await client.UpdateDbStructureAsync(entities);
                 if (msg != null) result.Notes.Add($"UpdateDBStructure: {msg}");
@@ -286,6 +303,7 @@ public sealed class Importer(CreatioClient client)
 
             if (!options.NoCompile && schemas.Count > 0)
             {
+                Log.Stage(ImportStages.Compile);
                 Log.Info(options.FullRebuild ? "Compiling configuration (full rebuild)..." : "Compiling configuration...");
                 // Only errors in files of the imported schemas stop the import; a target may already have
                 // compile errors of its own (seen on the 8.3 test stand), which are reported as warnings.
@@ -307,6 +325,7 @@ public sealed class Importer(CreatioClient client)
 
             if (sqlScripts.Count > 0)
             {
+                Log.Stage(ImportStages.SqlAfter);
                 var late = sqlScripts.Where(SaveLate).ToList();
                 if (late.Count > 0)
                 {
@@ -317,6 +336,7 @@ public sealed class Importer(CreatioClient client)
                 await installer.ExecuteSqlAsync(sqlScripts, ElementInstaller.SqlAfterPackage);
             }
 
+            if (data.Count > 0) Log.Stage(ImportStages.Data);
             if (data.Count > 0 && installer.UseSqlBindings)
             {
                 // As the package installer: store every binding, then one InstallData call for all of them.
@@ -376,6 +396,7 @@ public sealed class Importer(CreatioClient client)
 
             if (sqlScripts.Count > 0)
             {
+                Log.Stage(ImportStages.SqlAfterData);
                 Log.Info("SQL AfterSchemaData:");
                 await installer.ExecuteSqlAsync(sqlScripts, ElementInstaller.SqlAfterSchemaData);
             }
@@ -383,6 +404,7 @@ public sealed class Importer(CreatioClient client)
             // Files last: compilation above writes Terrasoft.Configuration\bin and would overwrite transferred files.
             if (filePlan.Count > 0)
             {
+                Log.Stage(ImportStages.Files);
                 var changed = filePlan.Count(p => p.State != "identical");
                 Log.Info($"Files into {fileRoot}: {changed} to write, {filePlan.Count - changed} identical...");
                 foreach (var line in FileTransfer.Describe(filePlan.Where(p => p.State != "identical").ToList())) Log.Info(line);
