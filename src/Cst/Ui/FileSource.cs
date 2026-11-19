@@ -48,6 +48,18 @@ public sealed class FileSelection(Func<string, IEnumerable<(string Name, bool Is
         }
     }
 
+    /// <summary>
+    /// Adds an entry from a loaded list as it is (a file, a folder or a mask like bin\Utk*.dll): it replaces entries
+    /// below it, and is skipped when a selected folder already covers it.
+    /// </summary>
+    public void Add(string entry)
+    {
+        var path = entry.Trim().Replace('/', '\\').TrimEnd('\\');
+        if (path.Length == 0 || SelectedAncestorOrSelf(path) != null) return;
+        _roots.RemoveWhere(r => IsUnder(r, path));
+        _roots.Add(path);
+    }
+
     /// <summary>Entries for the files: section, sorted.</summary>
     public List<string> Entries() => _roots.OrderBy(r => r, StringComparer.OrdinalIgnoreCase).ToList();
 }

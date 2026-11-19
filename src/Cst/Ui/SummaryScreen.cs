@@ -94,6 +94,16 @@ public sealed class SummaryScreen(
         }
     }
 
+    /// <summary>Takes the mapping of a loaded list ('package Src -> Target:'); it wins over a remembered one.</summary>
+    public void ApplyMapping(IEnumerable<SchemaListPackage> sections)
+    {
+        foreach (var s in sections.Where(s => !s.Target.Equals(s.Source, StringComparison.OrdinalIgnoreCase)))
+        {
+            _mapping[s.Source] = s.Target;
+            _remembered.Remove(s.Source);
+        }
+    }
+
     /// <summary>Called after the user went back to the selection: folder counts are recomputed.</summary>
     public void SelectionChanged() => _folderNotes = null;
 

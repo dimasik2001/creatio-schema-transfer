@@ -1,6 +1,7 @@
 # Run after export-map-save.keys (same settings folder): the dev->test mapping comes back as "(remembered)".
 Enter                 # Export
 Enter                 # dev (last used, first in the list)
+Enter                 # What to export? -> Select (by hand)
 text:utkcst
 Enter
 Space                 # Objects

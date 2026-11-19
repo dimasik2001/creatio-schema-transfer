@@ -1,0 +1,15 @@
+# List for load-list.keys (dev stand): a whole package, an element section with mapping and a type hint,
+# things that do not exist (reported, not applied) and a file of the Creatio folder.
+packages:
+ - UtkYachtRental
+
+package UtkCstSource -> UtkCstTarget:
+ - UtkCstOrder
+ - UtkCstStatus [data]
+ - NoSuchSchema
+
+package NoSuchPackage:
+ - Anything
+
+files:
+ - Features.config

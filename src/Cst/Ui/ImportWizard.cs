@@ -41,52 +41,10 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
     private async Task<string?> PickArchiveAsync(StandSession target)
     {
         Header(target, "archive");
-        const string typed = "\u0000typed", back = "\u0000back";
-        var files = Candidates();
-        var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
-            .Title("Which archive (or list) to import?")
-            .PageSize(15)
-            .UseConverter(c => c switch
-            {
-                typed => "[grey]Type a path…[/]",
-                back => "[grey]← Back[/]",
-                _ => Describe(c)
-            })
-            .AddChoices(files.Append(typed).Append(back)));
-        if (choice == back) return null;
-        if (choice == typed)
-        {
-            choice = AnsiConsole.Prompt(new TextPrompt<string>("Archive (.zip) or list (.txt):").Validate(p =>
-                File.Exists(p.Trim().Trim('"')) ? ValidationResult.Success() : ValidationResult.Error("No such file."))).Trim().Trim('"');
-        }
-        choice = Path.GetFullPath(choice);
+        var choice = FilePicker.Pick("Which archive (or list) to import?", state, baseDir, archives: true, lists: true);
+        if (choice == null) return null;
         if (choice.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)) return await ExportListAsync(target, choice);
         return choice;
-    }
-
-    /// <summary>Recent and nearby archives and lists, newest first.</summary>
-    private List<string> Candidates()
-    {
-        var found = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
-        void Add(string path)
-        {
-            try { if (File.Exists(path)) found[Path.GetFullPath(path)] = File.GetLastWriteTime(path); } catch (IOException) { }
-        }
-        foreach (var p in state.RecentArchives.Concat(state.RecentLists)) Add(p);
-        foreach (var dir in new[] { Path.Combine(baseDir, "archives"), Path.Combine(baseDir, "lists"), baseDir, Environment.CurrentDirectory }.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            if (!Directory.Exists(dir)) continue;
-            foreach (var f in Directory.EnumerateFiles(dir, "*.zip").Concat(Directory.EnumerateFiles(dir, "*.txt"))) Add(f);
-        }
-        return found.OrderByDescending(x => x.Value).Take(20).Select(x => x.Key).ToList();
-    }
-
-    private static string Describe(string path)
-    {
-        var kind = path.EndsWith(".txt", StringComparison.OrdinalIgnoreCase) ? "list   " : "archive";
-        string when = "";
-        try { when = File.GetLastWriteTime(path).ToString("yyyy-MM-dd HH:mm"); } catch (IOException) { }
-        return Markup.Escape(UiApp.Fit($"{kind}  {when}  {Path.GetFileName(path)}  ({Path.GetDirectoryName(path)})", 6));
     }
 
     /// <summary>A list file is exported first (asks the source stand), then imported.</summary>

@@ -68,7 +68,9 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
                 {
                     int sel = _selected.TryGetValue(p.Name, out var s) ? s.Count : 0;
                     var mark = _elements.TryGetValue(p.Name, out var els) ? MarkOf(sel, els.Count) : sel > 0 ? Mark.Partial : Mark.None;
-                    var detail = (mark == Mark.All ? "whole package (zip install) · " : sel > 0 ? $"{sel} selected · " : "")
+                    var detail = (mark == Mark.All && !_elementsOnly.Contains(p.Name) ? "whole package (zip install) · "
+                                     : mark == Mark.All ? "all elements, one by one (from the list) · "
+                                     : sel > 0 ? $"{sel} selected · " : "")
                                  + (p.IsOwn ? "" : "base · ") + p.Maintainer;
                     return new BrowserItem { Id = p.Name, Label = p.Name, IsContainer = true, Mark = mark, Detail = detail };
                 }).ToList();
@@ -115,6 +117,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         {
             package = item.Id;
             targets = await ElementsAsync(package);
+            _elementsOnly.Remove(package); // marked on the package level: a whole package again
         }
         else
         {
@@ -158,6 +161,46 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
             return SchemaList.Build(name, name, chosen, all.Select(e => (e.Name, e.Kind)));
         }).ToList();
 
+    /// <summary>
+    /// Packages that came from a 'package X:' section of a loaded list: they stay element sections even when every
+    /// element is selected (the list asked for an element-by-element transfer, not a zip install). Marking the
+    /// package as a whole on the package level clears it.
+    /// </summary>
+    private readonly HashSet<string> _elementsOnly = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Puts a parsed list into the selection: element sections (by name, with the type hint when given) and whole
+    /// packages (every element). Returns what could not be found on the stand; the rest is applied.
+    /// </summary>
+    public async Task<List<string>> ApplyListAsync(IEnumerable<SchemaListPackage> elementSections, IEnumerable<string> wholePackages)
+    {
+        var problems = new List<string>();
+        foreach (var section in elementSections)
+        {
+            var pkg = packages.FirstOrDefault(p => p.Name.Equals(section.Source, StringComparison.OrdinalIgnoreCase));
+            if (pkg == null) { problems.Add($"package {section.Source} does not exist on this stand"); continue; }
+            var all = await ElementsAsync(pkg.Name);
+            var set = Selected(pkg.Name);
+            foreach (var entry in section.Entries)
+            {
+                var found = all.Where(e => e.Name.Equals(entry.Name, StringComparison.OrdinalIgnoreCase) && (entry.Kind == null || e.Kind == entry.Kind)).ToList();
+                if (found.Count == 0) problems.Add($"{pkg.Name}: '{entry.Name}'{(entry.Kind is { } k ? $" [{k}]" : "")} not found");
+                else if (found.Count > 1) problems.Add($"{pkg.Name}: '{entry.Name}' is ambiguous ({string.Join(", ", found.Select(f => f.Kind))}); add a type hint like [data] to the list");
+                else set.Add((found[0].Kind, found[0].UId));
+            }
+            if (set.Count > 0) _elementsOnly.Add(pkg.Name);
+        }
+        foreach (var name in wholePackages)
+        {
+            var pkg = packages.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (pkg == null) { problems.Add($"package {name} (packages: section) does not exist on this stand"); continue; }
+            var set = Selected(pkg.Name);
+            foreach (var e in await ElementsAsync(pkg.Name)) set.Add((e.Kind, e.UId));
+            _elementsOnly.Remove(pkg.Name);
+        }
+        return problems;
+    }
+
     /// <summary>Adds one element (found by package, kind and UId) to the selection; false when the package does not have it.</summary>
     public async Task<bool> SelectAsync(string package, ItemKind kind, Guid uId)
     {
@@ -181,7 +224,7 @@ public sealed class PackageSource(Catalog catalog, IReadOnlyList<PackageInfo> pa
         {
             var all = _elements[package];
             var name = Package(package).Name;
-            if (set.Count >= all.Count) { whole.Add(name); continue; }
+            if (set.Count >= all.Count && !_elementsOnly.Contains(package)) { whole.Add(name); continue; }
             var chosen = all.Where(e => set.Contains((e.Kind, e.UId))).Select(e => (e.Name, e.Kind));
             elements.Add(SchemaList.Build(name, name, chosen, all.Select(e => (e.Name, e.Kind))));
         }

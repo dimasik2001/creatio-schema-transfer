@@ -1,0 +1,34 @@
+# Export from dev by loading a saved list instead of selecting by hand. Needs the newest .txt in the settings
+# folder's lists\ to be a list like tests\ui-scenarios\load-list.txt (copy it there first).
+Enter                 # main menu: Export
+Enter                 # dev
+wait:what to export
+Down                  # Load a list
+Enter
+wait:list picker
+Enter                 # newest list
+wait:loaded (with what was not applied)
+Enter                 # pause -> summary
+wait:summary from the list
+Down
+Down
+Down
+Down
+Down                  # Back (Check, Mapping, Save, Export, Import, Back, Menu)
+Enter
+wait:selection browser with the list's marks
+F2
+wait:summary again
+Down
+Down
+Down
+Down
+Down
+Down                  # Menu
+Enter
+text:y
+Enter
+Down
+Down
+Down
+Enter                 # Quit

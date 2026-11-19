@@ -172,15 +172,82 @@ public sealed class UiApp
         FileSource? fileTab = source.HasPath ? new FileSource(source.Settings.Path!) : null;
         if (fileTab != null) tabs.Add(fileTab);
 
-        var baseDir = Path.GetDirectoryName(Path.GetFullPath(_settingsPath)) ?? AppContext.BaseDirectory;
+        var baseDir = BaseDir;
         var summary = new SummaryScreen(source, packages, packageTab, fileTab, _envs, _state, _log, baseDir);
+
+        // Manual selection, or a saved list loaded into the same selection (then straight to the summary).
+        const string manual = "manual", fromList = "list";
+        var how = AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title("What to export?")
+            .UseConverter(c => c == manual
+                ? MenuLine("Select", "mark packages, schemas and files by hand", 12)
+                : MenuLine("Load a list", "take a saved list (package/packages/files sections)", 12))
+            .AddChoices(manual, fromList));
+        bool skipBrowser = false;
+        if (how == fromList)
+        {
+            skipBrowser = await LoadListAsync(source, packageTab, fileTab, summary);
+            if (!skipBrowser && !AnsiConsole.Confirm("Continue with manual selection?", true)) return;
+        }
+
         while (true)
         {
-            var result = await new SelectionBrowser(source.Header, tabs).RunAsync();
-            if (result == BrowserResult.Back) return;
+            if (!skipBrowser)
+            {
+                var result = await new SelectionBrowser(source.Header, tabs).RunAsync();
+                if (result == BrowserResult.Back) return;
+            }
+            skipBrowser = false;
             if (await summary.RunAsync() == SummaryResult.MainMenu) return;
             summary.SelectionChanged();
         }
+    }
+
+    /// <summary>
+    /// Loads a schema list into the selection: element sections (with their mapping), whole packages and files.
+    /// Shows what could not be applied. Returns true when something was loaded (go to the summary).
+    /// </summary>
+    private async Task<bool> LoadListAsync(StandSession source, PackageSource packageTab, FileSource? fileTab, SummaryScreen summary)
+    {
+        var path = FilePicker.Pick("Which list to load?", _state, BaseDir, archives: false, lists: true);
+        if (path == null) return false;
+        List<SchemaListPackage> sections;
+        List<string> whole, files;
+        try
+        {
+            sections = SchemaList.ParseFile(path);
+            whole = SchemaList.ParseWholePackagesSection(path);
+            files = SchemaList.ParseFilesSection(path);
+        }
+        catch (Exception ex) when (ex is FormatException or IOException or UnauthorizedAccessException)
+        {
+            AnsiConsole.MarkupLine($"[red]Cannot read the list:[/] {Markup.Escape(ex.Message)}");
+            UiInput.Pause();
+            return false;
+        }
+        var problems = new List<string>();
+        await AnsiConsole.Status().StartAsync($"Loading {Markup.Escape(Path.GetFileName(path))}...", async _ =>
+            problems = await packageTab.ApplyListAsync(sections, whole));
+        if (files.Count > 0)
+        {
+            if (fileTab == null) problems.Add($"files: section ({files.Count} entr{(files.Count == 1 ? "y" : "ies")}) skipped: {source.Name} has no \"Path\" (Creatio folder) in appsettings.json");
+            else foreach (var f in files) fileTab.Selection.Add(f);
+        }
+        summary.ApplyMapping(sections);
+        UiState.Remember(_state.RecentLists, path);
+
+        int elements = sections.Sum(s => s.Entries.Count);
+        AnsiConsole.MarkupLine($"[green]Loaded[/] {Markup.Escape(Path.GetFileName(path))}: {elements} element entr{(elements == 1 ? "y" : "ies")}, "
+            + $"{whole.Count} whole package(s), {(fileTab == null ? 0 : files.Count)} file entr{(files.Count == 1 ? "y" : "ies")}.");
+        if (problems.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[yellow]Not applied ({problems.Count}):[/]");
+            foreach (var p in problems) AnsiConsole.MarkupLine($"  [yellow]•[/] {Markup.Escape(p)}");
+        }
+        bool any = packageTab.HasSelection || (fileTab?.HasSelection ?? false);
+        if (!any) AnsiConsole.MarkupLine("[red]Nothing from the list exists on this stand.[/]");
+        UiInput.Pause(any ? "Press any key to open the summary..." : "Press any key to continue...");
+        return any;
     }
 
     private string BaseDir => Path.GetDirectoryName(Path.GetFullPath(_settingsPath)) ?? AppContext.BaseDirectory;

@@ -1,6 +1,7 @@
 # Export from dev with mapping to test, adding a referenced element, saving the list and writing the archive.
 Enter                 # main menu: Export
 Enter                 # dev
+Enter                 # What to export? -> Select (by hand)
 text:utkcst
 Enter                 # open UtkCstSource
 Space                 # Objects

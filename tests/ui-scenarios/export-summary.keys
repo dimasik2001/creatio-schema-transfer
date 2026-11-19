@@ -3,6 +3,7 @@
 Enter                 # main menu: Export
 wait:stand list
 Enter                 # first stand (dev)
+Enter                 # What to export? -> Select (by hand)
 wait:packages tab
 text:utkcst           # filter -> UtkCstSource
 Enter                 # open it
