@@ -327,87 +327,23 @@ static class Cli
     static async Task<int> RestoreAsync(Args a, bool json)
     {
         var dir = a.Required("backup");
-        var infoPath = Path.Combine(dir, "restore.json");
-        if (!File.Exists(infoPath)) throw new ArgumentException($"{infoPath} not found.");
-        var info = JsonNode.Parse(File.ReadAllText(infoPath))!;
-        JsonObject[] Arr(string key) => info[key]?.AsArray().OfType<JsonObject>().ToArray() ?? [];
-        var schemaBackups = Arr("schemaBackups");
-        var sqlBackups = Arr("sqlBackups");
-        var dataBackups = Arr("dataBackups");
-        var leftovers = info["createdSchemas"]?.AsArray().Select(n => "schema " + n).ToList() ?? [];
-        var restored = new List<string>();
+        if (!File.Exists(Restorer.InfoPath(dir))) throw new ArgumentException($"{Restorer.InfoPath(dir)} not found.");
         using var client = await ConnectAsync(a);
-        var installer = new ElementInstaller(client, client.DbEngineType);
-
-        foreach (var b in Enumerable.Reverse(dataBackups))
-        {
-            var backup = b["backup"].Deserialize<ElementInstaller.DataBackup>(Manifest.Json)!;
-            Log.Info($"[data] restoring previous values of {b["name"]}...");
-            await installer.RestoreDataAsync(backup, dir);
-            restored.Add($"data {b["name"]} ({backup.Updated.Count} row(s){(backup.BindingBackupDir != null ? ", binding content" : "")})");
-            if (backup.Inserted.Count > 0) leftovers.Add($"{backup.Inserted.Count} row(s) inserted into {backup.Entity} by {b["name"]}: {string.Join(", ", backup.Inserted)}");
-            if (b["isNew"]?.GetValue<bool>() == true) leftovers.Add($"data binding {b["name"]}");
-        }
-        var entities = new List<Guid>();
-        foreach (var b in schemaBackups)
-        {
-            var md = await Io.ReadAllTextAsync(Path.Combine(dir, b["file"]!.ToString()));
-            Log.Info($"[{b["package"]}] re-importing previous {b["name"]}...");
-            await client.ImportSchemaAsync(Guid.Parse(b["packageUId"]!.ToString()), b["name"]!.ToString(), md);
-            if (b["manager"]?.ToString() == "EntitySchemaManager" && Guid.TryParse(b["uId"]?.ToString(), out var uid))
-                entities.Add(uid);
-            if (b["manager"]?.ToString() == "SourceCodeSchemaManager" && Guid.TryParse(b["uId"]?.ToString(), out var codeUId)
-                && await client.EnsureSourceCodeBodyAsync(codeUId, b["name"]!.ToString(), md))
-                Log.Info($"  {b["name"]}: import kept the code; restored through the source code designer");
-            restored.Add($"schema {b["package"]}/{b["name"]}");
-        }
-        if (entities.Count > 0 && await client.UpdateDbStructureAsync(entities) is { } msg) Log.Warn($"UpdateDBStructure: {msg}");
-        foreach (var b in sqlBackups)
-        {
-            if (b["isNew"]?.GetValue<bool>() == true) { leftovers.Add($"SQL script {b["name"]}"); continue; }
-            Log.Info($"[sql] restoring previous body of {b["name"]} (not executed)...");
-            await client.SaveSqlScriptAsync(Guid.Parse(b["uId"]!.ToString()), b["name"]!.ToString(), Guid.Parse(b["packageUId"]!.ToString()),
-                b["previousBody"]?.ToString() ?? "", b["installType"]!.GetValue<int>(), b["dbEngineType"]!.GetValue<int>(), [], false);
-            restored.Add($"SQL {b["name"]}");
-        }
-        // Whole packages last (they were installed first): reinstall the backed-up package zip.
-        var wholeBackups = Arr("wholeBackups");
-        foreach (var b in Enumerable.Reverse(wholeBackups))
-        {
-            var name = b["name"]!.ToString();
-            if (b["existed"]?.GetValue<bool>() != true || b["file"] is null) { leftovers.Add($"package {name} (created by the zip install)"); continue; }
-            Log.Info($"[{name}] reinstalling the backed-up package (zip installer)...");
-            var zipName = $"cst_restore_{DateTime.Now:yyyyMMdd_HHmmss}_{name}.zip";
-            await client.UploadPackageAsync(zipName, File.ReadAllBytes(Path.Combine(dir, b["file"]!.ToString())));
-            await client.InstallPackageAsync(zipName);
-            restored.Add($"package {name}");
-        }
-        var errors = new List<string>();
-        if (!a.Flag("no-compile") && (schemaBackups.Length > 0 || sqlBackups.Length > 0 || dataBackups.Length > 0 || wholeBackups.Length > 0))
-        {
-            Log.Info("Compiling configuration...");
-            errors = await client.BuildAsync(false);
-        }
-        // Files last, as in import (a compilation would rewrite Terrasoft.Configuration\bin).
-        if (info["fileBackups"] is JsonArray fileBackups && fileBackups.Count > 0)
-        {
-            Log.Info($"Restoring {fileBackups.Count} file(s)...");
-            restored.AddRange(FileTransfer.Restore(fileBackups, dir));
-        }
-        foreach (var w in installer.Warnings) Log.Warn(w);
-        if (json) PrintJson(new { ok = errors.Count == 0, restored, notRemoved = leftovers, compileErrors = errors });
+        var r = await new Restorer(client).RestoreAsync(dir, a.Flag("no-compile"));
+        foreach (var w in r.Warnings) Log.Warn(w);
+        if (json) PrintJson(new { ok = r.CompileErrors.Count == 0, restored = r.Restored, notRemoved = r.NotRemoved, compileErrors = r.CompileErrors });
         else
         {
-            Console.WriteLine($"Restored: {string.Join(", ", restored)}");
+            Console.WriteLine($"Restored: {string.Join(", ", r.Restored)}");
             Console.WriteLine("Executed SQL scripts are not undone.");
-            if (leftovers.Count > 0)
+            if (r.NotRemoved.Count > 0)
             {
                 Console.WriteLine("Created by the import and NOT removed (delete manually if needed):");
-                foreach (var l in leftovers) Console.WriteLine("  - " + l);
+                foreach (var l in r.NotRemoved) Console.WriteLine("  - " + l);
             }
-            foreach (var e in errors) Console.WriteLine("  " + e);
+            foreach (var e in r.CompileErrors) Console.WriteLine("  " + e);
         }
-        return errors.Count > 0 ? 5 : 0;
+        return r.CompileErrors.Count > 0 ? 5 : 0;
     }
 
     static void PrintPlan(Manifest m)

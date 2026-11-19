@@ -363,8 +363,8 @@ public sealed class SummaryScreen(
         if (!await EnsureTargetAsync("Import into which stand?")) return;
         var archive = await ExportArchiveAsync(pause: false);
         if (archive == null) return;
-        AnsiConsole.MarkupLine($"[yellow]The import wizard is not implemented yet[/] (next step). The archive for {Markup.Escape(_target!.Name)} is ready.");
-        UiInput.Pause();
+        // Same wizard as the main menu, starting at the preview: stand and archive are known.
+        await new ImportWizard(envs, state, log, baseDir).RunAsync(_target, archive);
     }
 
     /// <summary>Runs work under a spinner that shows the latest progress line of cst.</summary>

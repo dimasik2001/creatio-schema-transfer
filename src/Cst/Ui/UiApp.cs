@@ -167,27 +167,32 @@ public sealed class UiApp
         }
     }
 
-    private async Task ImportAsync()
-    {
-        var target = await _envs.PickAsync(StandPurpose.Target, "Import into which stand?");
-        if (target == null) return;
-        Header(target, "Import");
-        NotYet("The import wizard");
-    }
+    private string BaseDir => Path.GetDirectoryName(Path.GetFullPath(_settingsPath)) ?? AppContext.BaseDirectory;
+
+    private Task ImportAsync() => new ImportWizard(_envs, _state, _log, BaseDir).RunAsync();
 
     private async Task RestoreAsync()
     {
         var target = await _envs.PickAsync(StandPurpose.Target, "Restore which stand?");
         if (target == null) return;
         Header(target, "Restore");
-        NotYet("Restore");
-    }
-
-    private static void NotYet(string what)
-    {
-        AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(what)} is not implemented yet.[/]");
-        UiInput.Pause("Press any key to return to the menu...");
+        const string typed = "\u0000typed", back = "\u0000back";
+        var dirs = _state.RecentWorkDirs.Where(d => File.Exists(Transfer.Restorer.InfoPath(d))).ToList();
+        var choice = AnsiConsole.Prompt(new SelectionPrompt<string>()
+            .Title("Restore from which import work dir?")
+            .PageSize(12)
+            .UseConverter(c => c switch
+            {
+                typed => "[grey]Type a path…[/]",
+                back => "[grey]← Back[/]",
+                _ => Markup.Escape(Fit($"{Directory.GetLastWriteTime(c):yyyy-MM-dd HH:mm}  {c}", 6))
+            })
+            .AddChoices(dirs.Append(typed).Append(back)));
+        if (choice == back) return;
+        if (choice == typed)
+            choice = AnsiConsole.Prompt(new TextPrompt<string>("Work dir (holds restore.json):").Validate(p =>
+                File.Exists(Transfer.Restorer.InfoPath(p.Trim().Trim('"'))) ? ValidationResult.Success() : ValidationResult.Error("No restore.json there."))).Trim().Trim('"');
+        await new RestoreFlow(_log).RunAsync(target, choice);
     }
 
     private void SaveState()
