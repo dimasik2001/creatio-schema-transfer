@@ -50,6 +50,12 @@ static class Cli
 
     public static async Task<int> RunAsync(string[] argv)
     {
+        // Console UI: no arguments, or only --settings (run.ps1 and wrappers always pass it), in an interactive console.
+        bool uiArgs = argv.Length == 0 || (argv.Length == 2 && argv[0].Equals("--settings", StringComparison.OrdinalIgnoreCase));
+        if (uiArgs && Cst.Ui.UiInput.IsInteractive())
+            return await Cst.Ui.UiApp.RunAsync(argv.Length == 2 ? argv[1] : null);
+        if (uiArgs) argv = [];
+
         if (argv.Length == 0 || argv[0] is "-h" or "--help" or "help")
         {
             Console.WriteLine(Usage);
