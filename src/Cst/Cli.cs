@@ -18,6 +18,7 @@ static class Cli
 
         Usage:
           cst export  --env <src> (--config <list.txt> | --schemas "Pkg->Target:A,B;Pkg2:C") --out <transfer.zip>
+                      [--load-to-db [--allow-delete]]
           cst import  --env <dst> --archive <transfer.zip> [--dry-run] [--no-compile] [--rebuild] [--data-designer]
                       [--work-dir <dir>]
           cst inspect --archive <transfer.zip>
@@ -27,6 +28,14 @@ static class Cli
           dependencies; anything missing is listed in <archive>.missing.md). Elements are installed one by one
           through Creatio's designer services, no package zip: SQL BeforePackage → schemas → DB structure →
           compile → SQL AfterPackage → data bindings → SQL AfterSchemaData. SQL runs only on its own DB engine.
+
+        Export --load-to-db (source in file system development mode, FSM): first loads the export's packages from
+          the source's files into its DB (Creatio's LoadPackagesToDB, as clio pkg-to-db), so whole packages, SQL
+          scripts, data bindings and translations are exported as they are on disk (schema code is always taken
+          from disk). It writes every element of those packages whose files differ, DELETES from the DB elements
+          that have no folder on disk, and may update the DB structure, run SQL and install data (Web.config
+          AutoUpdateDBStructure / AutoInstallSqlScript / AutoInstallPackageData). cst stops before loading if
+          something would be deleted, or cannot check it ("Path" not set), unless --allow-delete.
 
         Connection (instead of or on top of --env from appsettings.json next to cst.exe):
           --url <http://host:port> --login <user> --password <pwd>   (or CST_PASSWORD / CST_PASSWORD_<ENV>)
@@ -120,12 +129,53 @@ static class Cli
         if (a.Value("schemas") is { } inline) SchemaList.Merge(list, SchemaList.ParseInline(inline));
         var output = a.Required("out");
         using var client = await ConnectAsync(a);
+        FsmLoadResult? loaded = null;
+        if (a.Flag("load-to-db")) loaded = await LoadToDbAsync(client, FsmLoader.PackagesOf(list, whole), a.Flag("allow-delete"));
         var manifest = await new Exporter(client).ExportAsync(list, output, files, whole);
 
-        if (json) { PrintJson(new { ok = true, archive = Path.GetFullPath(output), manifest }); return 0; }
+        if (json) { PrintJson(new { ok = true, archive = Path.GetFullPath(output), loadedToDb = loaded, manifest }); return 0; }
         PrintPlan(manifest);
         Console.WriteLine($"Archive: {Path.GetFullPath(output)}");
         return 0;
+    }
+
+    /// <summary>
+    /// export --load-to-db: loads the export's packages from the source's file system into its DB first (FSM stands).
+    /// Stops before loading when the load would delete elements, or cannot be checked (no "Path"), unless --allow-delete.
+    /// Returns null when there is nothing to load (FSM off, no package folder).
+    /// </summary>
+    static async Task<FsmLoadResult?> LoadToDbAsync(CreatioClient client, List<string> packages, bool allowDelete)
+    {
+        var plan = await FsmLoader.PlanAsync(client, packages);
+        if (plan.IsFsm == false)
+        {
+            Log.Warn("--load-to-db: file system development mode is off on the source; nothing to load, the export takes the DB as it is.");
+            return null;
+        }
+        if (plan.IsFsm == null) Log.Warn("--load-to-db: the source does not report its FSM state (GetIsFileDesignMode); trying to load anyway.");
+        foreach (var p in plan.NotOnDisk) Log.Warn($"--load-to-db: package {p} has no folder in {plan.PkgPath}; it is not loaded.");
+        if (!plan.DiskChecked && !allowDelete)
+            throw new TransferException([
+                "--load-to-db: the source has no \"Path\" (Creatio folder) in appsettings.json, so cst cannot check what the load would delete. "
+                + "Loading deletes from the DB every element of these packages that has no folder on disk: " + string.Join(", ", plan.Packages)
+                + ". Set \"Path\" or pass --allow-delete to load anyway. Nothing was loaded."]);
+        if (plan.WillDelete.Count > 0 && !allowDelete)
+            throw new TransferException(new[] { $"--load-to-db would DELETE {plan.WillDelete.Count} element(s) from the source DB (in the DB, not on disk). Nothing was loaded; pass --allow-delete to load anyway:" }
+                .Concat(plan.WillDelete.Select(d => "  - " + d)));
+        if (plan.Packages.Count == 0)
+        {
+            Log.Warn("--load-to-db: no package of the export has a folder on disk; nothing loaded.");
+            return null;
+        }
+        var r = await FsmLoader.LoadAsync(client, plan.Packages);
+        if (r.Errors.Count > 0)
+            throw new InstallException($"Loading into the source DB failed for {r.Errors.Count} element(s); no archive was written. "
+                + $"Elements without errors were loaded ({r.Changes.Count} change(s)).{Environment.NewLine}  - "
+                + string.Join(Environment.NewLine + "  - ", r.Errors));
+        foreach (var c in r.Changes.Take(40)) Console.WriteLine("  loaded " + c);
+        if (r.Changes.Count > 40) Console.WriteLine($"  ... {r.Changes.Count - 40} more");
+        if (r.Changes.Count == 0) Console.WriteLine("  nothing to load: the DB already matches the files.");
+        return r;
     }
 
     static async Task<int> ImportAsync(Args a, bool json)
@@ -407,7 +457,7 @@ static class Cli
 sealed class Args
 {
     private readonly Dictionary<string, string?> _values = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly HashSet<string> Flags = new(StringComparer.OrdinalIgnoreCase) { "json", "verbose", "dry-run", "no-compile", "rebuild", "data-designer", "fix" };
+    private static readonly HashSet<string> Flags = new(StringComparer.OrdinalIgnoreCase) { "json", "verbose", "dry-run", "no-compile", "rebuild", "data-designer", "fix", "load-to-db", "allow-delete" };
 
     public static Args Parse(IEnumerable<string> argv)
     {

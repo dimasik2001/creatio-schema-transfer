@@ -57,6 +57,7 @@ public sealed class ImportWizard(EnvPicker envs, UiState state, UiLog log, strin
         var files = SchemaList.ParseFilesSection(listPath);
         var whole = SchemaList.ParseWholePackagesSection(listPath);
         var archive = Path.Combine(baseDir, "archives", $"{source.Name}-{DateTime.Now:yyyyMMdd-HHmm}.zip");
+        if (!await FsmPrompt.AskAndLoadAsync(source, FsmLoader.PackagesOf(list, whole), log)) return null;
         try
         {
             await Progress.RunAsync(log, T("Exporting the list..."), () => new Exporter(source.Client).ExportAsync(list, archive, files, whole));

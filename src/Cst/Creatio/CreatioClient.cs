@@ -431,6 +431,32 @@ public sealed class CreatioClient : IDisposable
         return null;
     }
 
+    /// <summary>
+    /// True when file system development mode (FSM) is on (WorkspaceExplorerService/GetIsFileDesignMode); null when the
+    /// stand does not answer it.
+    /// </summary>
+    public async Task<bool?> GetIsFileDesignModeAsync()
+    {
+        try
+        {
+            var json = await PostJsonAsync("ServiceModel/WorkspaceExplorerService.svc/GetIsFileDesignMode", new JsonObject());
+            return json?["value"] is JsonValue v && v.TryGetValue<bool>(out var on) ? on : null;
+        }
+        catch (CreatioException) { return null; }
+    }
+
+    /// <summary>
+    /// Loads packages from the stand's file system into its DB (AppInstallerService/LoadPackagesToDB, as clio
+    /// pkg-to-db): the "changes" and "errors" of the response. Needs FSM and the CanManageSolution right.
+    /// </summary>
+    public async Task<JsonNode?> LoadPackagesToDbAsync(IEnumerable<string> packageNames)
+    {
+        var json = await PostJsonAsync("ServiceModel/AppInstallerService.svc/LoadPackagesToDB", new JsonArray(packageNames.Select(n => (JsonNode)n).ToArray()));
+        if (json?["success"]?.GetValue<bool>() == false)
+            throw new CreatioException("LoadPackagesToDB: " + (json["errorInfo"]?["message"]?.ToString() ?? json.ToJsonString()));
+        return json;
+    }
+
     /// <summary>Compiles changed configuration (WorkspaceExplorerService/Build). Returns error lines.</summary>
     public async Task<List<string>> BuildAsync(bool full)
     {

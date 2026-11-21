@@ -1,0 +1,34 @@
+# Export from dev (file system development mode) with the FSM question: UtkYachtRental has nothing the load would
+# delete, so "Load into the DB, then export" comes first. Dev only; the load writes only what differs on disk.
+Enter                 # main menu: Export
+Enter                 # dev
+Enter                 # What to export? -> Select (by hand)
+text:utkyacht
+Enter                 # open UtkYachtRental
+Space                 # Objects
+Esc
+F2                    # summary
+wait:summary
+Down
+Down
+Down                  # Export (Check, Mapping, Save, Export, Import, Back, Menu)
+Enter
+wait:FSM question
+Enter                 # Load into the DB, then export
+wait:loaded, archive path
+Enter                 # default path
+wait:exported
+Enter                 # pause
+Down
+Down
+Down
+Down
+Down
+Down                  # Menu
+Enter                 # leave (the archive was written, so no question)
+wait:main menu
+Down
+Down
+Down
+Down                  # (Language)
+Enter                 # Quit

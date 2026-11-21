@@ -290,6 +290,30 @@ public static partial class L
         ["SQL AfterPackage"] = "SQL AfterPackage",
         ["SQL AfterSchemaData"] = "SQL AfterSchemaData",
 
+        // ---------- FSM: load packages into the DB before an export ----------
+        ["Comparing the packages on disk with the DB..."] = "Порівняння пакетів на диску з БД...",
+        ["Cannot check the packages on disk:"] = "Не вдалося перевірити пакети на диску:",
+        ["{0} is in file system development mode (FSM)."] = "{0} працює в режимі розробки у файловій системі (FSM).",
+        ["Schema code is always exported from disk. Loading the packages into the DB first also brings whole packages, SQL scripts, data bindings, translations and metadata changed on disk."] =
+            "Код схем завжди експортується з диска. Якщо спочатку завантажити пакети в БД, з диска підуть також пакети цілком, SQL-скрипти, прив'язки даних, переклади й метадані, змінені на диску.",
+        ["Packages to load: {0}"] = "Пакети для завантаження: {0}",
+        ["Creatio writes every element whose files differ from the DB; depending on its Web.config it may also update the DB structure, run changed SQL scripts and install changed data bindings."] =
+            "Creatio запише кожен елемент, файли якого відрізняються від БД; залежно від Web.config він також може оновити структуру БД, виконати змінені SQL-скрипти й встановити змінені прив'язки даних.",
+        ["{0} has no folder on disk; it is not loaded."] = "Для {0} немає папки на диску; його не буде завантажено.",
+        ["The stand has no \"Path\" in appsettings.json: cst cannot check what the load would delete from the DB."] =
+            "Для стенда не задано \"Path\" в appsettings.json: cst не може перевірити, що завантаження видалить із БД.",
+        ["The load would DELETE from the DB elements that have no folder on disk ({0}):"] = "Завантаження ВИДАЛИТЬ із БД елементи, для яких немає папки на диску ({0}):",
+        ["No package of the export has a folder on disk: nothing to load."] = "Для жодного пакета експорту немає папки на диску: завантажувати нічого.",
+        ["Load the packages into the DB before the export?"] = "Завантажити пакети в БД перед експортом?",
+        ["Load into the DB, then export"] = "Завантажити в БД, потім експортувати",
+        ["Load anyway, then export"] = "Усе одно завантажити, потім експортувати",
+        ["Export without loading"] = "Експортувати без завантаження",
+        ["Loading the packages from the file system into the DB..."] = "Завантаження пакетів із файлової системи в БД...",
+        ["Loading into the DB failed; no archive was written:"] = "Завантаження в БД не вдалося; архів не записано:",
+        ["Loading into the DB failed for {0} element(s); no archive was written:"] = "Завантаження в БД не вдалося для елементів ({0}); архів не записано:",
+        ["Nothing to load: the DB already matches the files."] = "Завантажувати нічого: БД уже відповідає файлам.",
+        ["Loaded into the DB: {0} change(s)."] = "Завантажено в БД змін: {0}.",
+
         // ---------- restore ----------
         ["Restore from which import work dir?"] = "З якої робочої папки імпорту відновити?",
         ["Work dir (holds restore.json):"] = "Робоча папка (з restore.json):",

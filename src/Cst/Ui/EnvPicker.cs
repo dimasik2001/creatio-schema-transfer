@@ -7,7 +7,7 @@ using static Cst.Ui.L;
 namespace Cst.Ui;
 
 /// <summary>A stand the UI is logged in to. The password lives only in <see cref="Settings"/> in memory.</summary>
-public sealed class StandSession(string name, EnvironmentSettings settings, CreatioClient client, string coreVersion) : IDisposable
+public sealed class StandSession(string name, EnvironmentSettings settings, CreatioClient client, string coreVersion, bool? isFsm = null) : IDisposable
 {
     public string Name { get; } = name;
     public EnvironmentSettings Settings { get; } = settings;
@@ -15,9 +15,11 @@ public sealed class StandSession(string name, EnvironmentSettings settings, Crea
     public string CoreVersion { get; } = coreVersion;
     public string DbEngine => string.IsNullOrWhiteSpace(Settings.DbEngine) ? T("DbEngine not set") : Settings.DbEngine!;
     public bool HasPath => !string.IsNullOrWhiteSpace(Settings.Path);
+    /// <summary>File system development mode (FSM) on the stand; null when it does not say.</summary>
+    public bool? IsFsm { get; } = isFsm;
 
-    /// <summary>Header text: "dev · 10.0.0.801 · MSSql".</summary>
-    public string Header => $"{Name} · {CoreVersion} · {DbEngine}";
+    /// <summary>Header text: "dev · 10.0.0.801 · MSSql" (+ " · FSM").</summary>
+    public string Header => $"{Name} · {CoreVersion} · {DbEngine}{(IsFsm == true ? " · FSM" : "")}";
 
     public void Dispose() => Client.Dispose();
 }
@@ -119,12 +121,14 @@ public sealed class EnvPicker(AppSettings settings, UiState state)
             try
             {
                 string core = "";
+                bool? fsm = null;
                 await AnsiConsole.Status().StartAsync(Markup.Escape(F("Connecting to {0} as {1}...", env.Url, env.Login)), async _ =>
                 {
                     await client.LoginAsync();
                     core = (await client.GetAppInfoAsync()).CoreVersion;
+                    fsm = await client.GetIsFileDesignModeAsync();
                 });
-                var session = new StandSession(name, env, client, core);
+                var session = new StandSession(name, env, client, core, fsm);
                 _sessions[name] = session;
                 AnsiConsole.MarkupLine($"[green]{Markup.Escape(T("Connected:"))}[/] {Markup.Escape(session.Header)}");
                 return session;

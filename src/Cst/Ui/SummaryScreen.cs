@@ -353,8 +353,10 @@ public sealed class SummaryScreen(
     /// <summary>Writes the archive; returns its full path, or null when the export failed (errors shown).</summary>
     private async Task<string?> ExportArchiveAsync(bool pause = true)
     {
-        var path = Path.GetFullPath(AskPath(T("Write the archive to"), DefaultPath("archives", ".zip")));
         var (elements, whole) = Lists();
+        // FSM source: optionally load the packages from the files into the DB first (export --load-to-db).
+        if (!await FsmPrompt.AskAndLoadAsync(source, FsmLoader.PackagesOf(elements, whole), log)) return null;
+        var path = Path.GetFullPath(AskPath(T("Write the archive to"), DefaultPath("archives", ".zip")));
         Manifest? manifest = null;
         await WithProgressAsync(T("Exporting..."), async () =>
             manifest = await new Exporter(source.Client) { PackageCache = _packageCache }.ExportAsync(elements, path, FileEntries(), whole));

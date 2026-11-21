@@ -38,6 +38,8 @@ Down
 Down
 Down                  # Export
 Enter
+wait:FSM question (dev is in FSM; UtkCstSource would lose DB-only elements, so "Export without loading" is first)
+Enter                 # Export without loading
 Enter                 # default path
 wait:exported (downloads again, with the warning)
 Enter                 # pause
