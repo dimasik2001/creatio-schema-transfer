@@ -30,6 +30,8 @@
     <Reference Include="System.IO.Compression.FileSystem" />
   </ItemGroup>
 
+  <Import Project="..\..\gate\CstGate.Embed.targets" />
+
   <!-- Pull in the shared cst sources, excluding the exe-only top-level Program.cs. -->
   <ItemGroup>
     <Compile Include="..\Cst\**\*.cs"

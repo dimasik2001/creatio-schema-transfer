@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    CstGate: the cst SQL gateway. One assembly, installed on a Creatio stand as a package that holds only
+    Files\Bin\CstGate.dll (.NET Framework) and Files\Bin\netstandard\CstGate.dll (.NET Core / .NET builds of Creatio),
+    no schemas. cst needs it only for the table data transfer (db-* commands); everything else uses standard services.
+    Built against CreatioSDK (compile-time only; the stand provides the Terrasoft assemblies).
+  -->
+  <PropertyGroup>
+    <TargetFrameworks>net472;netstandard2.0</TargetFrameworks>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>CstGate</AssemblyName>
+    <RootNamespace>CstGate</RootNamespace>
+    <Version>1.1.0</Version>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CreatioSDK" Version="8.0.3.1759" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.1" ExcludeAssets="runtime" PrivateAssets="all" />
+    <PackageReference Include="Common.Logging" Version="3.4.1" ExcludeAssets="runtime" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net472'">
+    <Reference Include="System.ServiceModel" />
+    <Reference Include="System.ServiceModel.Web" />
+    <Reference Include="System.ServiceModel.Activation" />
+    <Reference Include="System.Web" />
+  </ItemGroup>
+</Project>

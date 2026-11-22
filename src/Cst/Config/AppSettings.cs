@@ -33,6 +33,9 @@ public sealed class AppSettings
 {
     public Dictionary<string, EnvironmentSettings> Environments { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Thresholds of the table data transfer (db-tables, db-export, db-import).</summary>
+    public Cst.Data.DataSettings DbData { get; set; } = new();
+
     public static AppSettings Load(string? path)
     {
         path ??= Path.Combine(AppContext.BaseDirectory, "appsettings.json");
@@ -41,6 +44,7 @@ public sealed class AppSettings
             new JsonSerializerOptions { PropertyNameCaseInsensitive = true, ReadCommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
         var result = settings ?? new AppSettings();
         result.Environments = new Dictionary<string, EnvironmentSettings>(result.Environments, StringComparer.OrdinalIgnoreCase);
+        result.DbData ??= new Cst.Data.DataSettings();
         return result;
     }
 

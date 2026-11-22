@@ -176,6 +176,34 @@ public sealed class CreatioClient : IDisposable
         EnsureBaseResponse(resp, text, "InstallPackage");
     }
 
+    /// <summary>POST of raw bytes (application/octet-stream) to a service path: status and response bytes.</summary>
+    public async Task<(int Status, byte[] Body)> PostBytesAsync(string relative, byte[] body)
+    {
+        var content = new ByteArrayContent(body);
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        using var resp = await PostRawAsync(relative, content);
+        return ((int)resp.StatusCode, await resp.Content.ReadAsByteArrayAsync());
+    }
+
+    /// <summary>True when the host is .NET Framework (services under /0).</summary>
+    public bool IsNetFramework => _servicePrefix == "/0";
+
+    /// <summary>
+    /// Restarts the Creatio application (as clio restart-web-app): AppInstallerService/UnloadAppDomain on .NET Framework,
+    /// RestartApp on .NET. The connection drops while it restarts; errors are ignored.
+    /// </summary>
+    public async Task RestartAppAsync()
+    {
+        var method = IsNetFramework ? "UnloadAppDomain" : "RestartApp";
+        try
+        {
+            using var resp = await PostRawAsync("ServiceModel/AppInstallerService.svc/" + method,
+                new StringContent("{}", Encoding.UTF8, "application/json"));
+            Log.Debug($"{method}: HTTP {(int)resp.StatusCode}");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException) { Log.Debug($"{method}: {ex.Message}"); }
+    }
+
     public async Task<string> GetInstallLogAsync()
     {
         using var resp = await _http.GetAsync(ServiceUri("ServiceModel/PackageInstallerService.svc/GetLogFile"));

@@ -1,0 +1,20 @@
+<Project>
+  <!--
+    Builds the CstGate assembly (gate\CstGate) and embeds both builds into cst, which assembles the CstGate package
+    (Files\Bin\CstGate.dll + Files\Bin\netstandard\CstGate.dll, no schemas) at "cst gate install" time.
+    Imported by src\Cst (exe) and src\Cst.Lib (net48 library).
+  -->
+  <PropertyGroup>
+    <CstGateProject>$(MSBuildThisFileDirectory)CstGate\CstGate.csproj</CstGateProject>
+    <CstGateOut>$(MSBuildThisFileDirectory)CstGate\bin\Release\</CstGateOut>
+  </PropertyGroup>
+
+  <Target Name="BuildCstGate" BeforeTargets="PrepareForBuild">
+    <Exec Command="dotnet build &quot;$(CstGateProject)&quot; -c Release -v q -nologo" />
+  </Target>
+
+  <ItemGroup>
+    <EmbeddedResource Include="$(CstGateOut)net472\CstGate.dll" LogicalName="CstGate.net472.dll" />
+    <EmbeddedResource Include="$(CstGateOut)netstandard2.0\CstGate.dll" LogicalName="CstGate.netstandard.dll" />
+  </ItemGroup>
+</Project>
