@@ -1,0 +1,41 @@
+# Table data import into dev: archive from data-export.keys (newest in data\), insert + stop, dry run, the write is
+# declined (default No) — nothing is written. Then Restore data with no recorded import (back).
+wait:main menu
+Down
+Down
+Down                  # Table data
+Enter
+wait:table data menu
+Down                  # Import data
+Enter
+wait:stand list
+Enter                 # first stand
+wait:archive list
+Enter                 # newest data archive
+wait:mode
+Enter                 # insert
+wait:unique
+Enter                 # stop
+wait:dry run result + write question
+Enter                 # "Write into …?" -> default No
+wait:table data menu again
+Down
+Down                  # Restore data
+Enter
+wait:stand list
+Enter
+wait:work dirs (none: type a path / back)
+Down                  # ← Back
+Enter
+wait:table data menu once more
+Down
+Down
+Down                  # ← Back
+Enter
+wait:main menu
+Down
+Down
+Down
+Down
+Down                  # Quit
+Enter

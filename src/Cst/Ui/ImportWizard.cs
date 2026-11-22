@@ -332,7 +332,7 @@ public sealed class RestoreFlow(UiLog log)
         if (!UiInput.Confirm(T("Start the restore?"), false)) return;
         RestoreResult r;
         try { r = await Progress.RunStagesAsync(log, F("Restoring {0}", target.Name), () => new Restorer(target.Client).RestoreAsync(workDir, noCompile)); }
-        catch (Exception ex) when (ex is ArgumentException or CreatioException or IOException or HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is ArgumentException or CreatioException or IOException or HttpRequestException or TaskCanceledException or TransferException)
         {
             AnsiConsole.MarkupLine($"[red]{Markup.Escape(T("Restore failed:"))}[/] {Markup.Escape(ex.Message)}");
             UiInput.Pause();

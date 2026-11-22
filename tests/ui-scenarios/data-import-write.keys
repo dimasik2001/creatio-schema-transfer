@@ -1,0 +1,47 @@
+# Table data import into test WITH writing (UtkCst* test rows), then Restore data from the remembered work dir.
+# Leaves test as it was. Needs the archive from data-export.keys (dev UtkCstSource) as the newest in data\.
+wait:main menu
+Down
+Down
+Down                  # Table data
+Enter
+Down                  # Import data
+Enter
+wait:stand list
+Down                  # test
+Enter
+wait:archive list
+Enter                 # newest data archive
+wait:mode
+Enter                 # insert
+Enter                 # stop
+wait:dry run + write question
+Y
+Enter                 # write
+wait:written + pause
+Enter
+wait:table data menu
+Down
+Down                  # Restore data
+Enter
+wait:stand list
+Enter                 # test (the last target comes first)
+wait:work dirs (only backups made on test)
+Enter                 # the import just made
+wait:undo question
+Y
+Enter
+wait:restored + pause
+Enter
+wait:table data menu
+Down
+Down
+Down                  # ← Back
+Enter
+wait:main menu
+Down
+Down
+Down
+Down
+Down                  # Quit
+Enter

@@ -447,38 +447,13 @@ static class Cli
         }
         catch (Cst.Data.GateMissingException) { Log.Info($"Installing CstGate {embedded}..."); }
 
-        var zip = Cst.Data.GateInstaller.BuildZip();
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        await client.UploadPackageAsync("CstGate.zip", zip);
-        await client.InstallPackageAsync("CstGate.zip");
-        Log.Info($"Package installed in {sw.Elapsed.TotalSeconds:0} s.");
-
-        Cst.Data.GateInfo? info = null;
-        try { info = await gate.InfoAsync(); } catch (Cst.Data.GateMissingException) { }
-        if (info == null || info.Version != embedded)
+        Cst.Data.GateInfo info;
+        try { info = await Cst.Data.GateInstaller.InstallAsync(client, !a.Flag("no-restart"), s => Log.Info(s)); }
+        catch (Cst.Data.GateMissingException) when (a.Flag("no-restart"))
         {
-            if (a.Flag("no-restart"))
-            {
-                Console.WriteLine("The package is installed; the service loads after an application restart (run without --no-restart, or restart Creatio).");
-                return 0;
-            }
-            Log.Info("Restarting the application so it loads the gate...");
-            await client.RestartAppAsync();
-            var deadline = DateTime.UtcNow.AddMinutes(10);
-            while (info == null || info.Version != embedded)
-            {
-                if (DateTime.UtcNow > deadline) throw new InstallException("CstGate did not answer within 10 minutes after the restart.");
-                await Task.Delay(5000);
-                try
-                {
-                    await client.LoginAsync();
-                    info = await gate.InfoAsync();
-                }
-                catch (Exception ex) when (ex is Cst.Data.GateMissingException or CreatioException or System.Net.Http.HttpRequestException or TaskCanceledException)
-                {
-                    Log.Debug("waiting: " + ex.Message);
-                }
-            }
+            Console.WriteLine("The package is installed; the service loads after an application restart (run without --no-restart, or restart Creatio).");
+            return 0;
         }
         if (json) { PrintJson(new { ok = true, seconds = (int)sw.Elapsed.TotalSeconds, info }); return 0; }
         Console.WriteLine($"CstGate {info.Version} answers ({sw.Elapsed.TotalSeconds:0} s).");

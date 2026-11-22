@@ -4,6 +4,7 @@ wait:main menu (English)
 Down
 Down
 Down
+Down                  # (Table data)
 Enter                 # Language
 wait:language choice
 Down
@@ -19,9 +20,11 @@ wait:main menu again
 Down
 Down
 Down
+Down                  # (Дані таблиць)
 Enter                 # Мова
 Down
 Enter                 # English
+Down
 Down
 Down
 Down

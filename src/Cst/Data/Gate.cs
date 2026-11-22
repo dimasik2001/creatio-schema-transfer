@@ -258,6 +258,42 @@ public static class GateInstaller
         }
     }
 
+    /// <summary>
+    /// Installs (or updates) the gate: zip installer, then — when the service does not answer with the embedded
+    /// version — an application restart and waiting up to 10 minutes. Returns the gate's Info.
+    /// </summary>
+    public static async Task<GateInfo> InstallAsync(CreatioClient client, bool restart, Action<string> progress)
+    {
+        var gate = new GateClient(client);
+        var embedded = EmbeddedVersion;
+        var zip = BuildZip();
+        progress(Ui.L.F("Installing CstGate {0}...", embedded));
+        await client.UploadPackageAsync("CstGate.zip", zip);
+        await client.InstallPackageAsync("CstGate.zip");
+        GateInfo? info = null;
+        try { info = await gate.InfoAsync(); } catch (GateMissingException) { }
+        if (info != null && info.Version == embedded) return info;
+        if (!restart) throw new GateMissingException("The package is installed; the service loads after an application restart.");
+        progress(Ui.L.T("Restarting the application so it loads the gate..."));
+        await client.RestartAppAsync();
+        var deadline = DateTime.UtcNow.AddMinutes(10);
+        while (info == null || info.Version != embedded)
+        {
+            if (DateTime.UtcNow > deadline) throw new Transfer.InstallException("CstGate did not answer within 10 minutes after the restart.");
+            await Task.Delay(5000);
+            try
+            {
+                await client.LoginAsync();
+                info = await gate.InfoAsync();
+            }
+            catch (Exception ex) when (ex is GateMissingException or CreatioException or System.Net.Http.HttpRequestException or TaskCanceledException)
+            {
+                Log.Debug("waiting: " + ex.Message);
+            }
+        }
+        return info;
+    }
+
     public static byte[] BuildZip()
     {
         var content = new PackageContent();

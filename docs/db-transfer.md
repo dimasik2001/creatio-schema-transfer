@@ -2,7 +2,7 @@
 
 Статус (2026-11-22, не закоммичено): `db-tables` (п. 2.1), **CstGate** с сессиями (п. 1a) и **db-export / db-import /
 db-inspect / db-restore** на шлюзе (п. 1b) сделаны и проверены на dev и между dev (MSSql) ↔ test (PostgreSQL), с
-проверкой уникальных индексов (п. 1b.1). Дальше — UI (п. 10). Ответы пользователя — в п. 13.
+проверкой уникальных индексов (п. 1b.1); UI «Table data» (п. 1c) сделан и прогнан сценариями. Ответы пользователя — в п. 13.
 
 ## 1. Что и зачем
 
@@ -172,6 +172,38 @@ NULL и ставится после всех вставок (self-reference, н�
 
 Не сделано / не проверено: UI (п. 10); .NET-сборка шлюза (оба стенда на .NET Framework); bulk COPY для PG (INSERT
 и так быстрый); сброс кешей Creatio после импорта (только подсказка); `gate-uninstall`.
+
+## 1c. UI «Table data / Дані таблиць» (сделано 2026-11-22)
+
+Главное меню: Export · Import · Restore · **Table data** · Language · Quit (в сценариях Quit теперь = 5×Down,
+Language = 4×Down; все `.keys` обновлены). Код: `src/Cst/Ui/DataFlows.cs`, `DataSources.cs`; тексты — с украинским
+переводом. Подменю:
+- **Export data**: стенд → проверка CstGate (нет или старая версия → объяснение и вопрос «Install/Update CstGate on X
+  now?», по умолчанию No; установка перезапускает приложение) → Select (браузер пакетов: свои, Ctrl+A все, фильтр
+  набором) или Load a plan → браузер таблиц (строки, ~размер, своя/заменённая; Space: skip → full → top → children)
+  → итог: план в рамке и шаги Export archive / Save plan / Table mode (full, top N by …, where, ids, children, skip) /
+  References (политика на колонку, «default») / Children (кто ссылается на выбранные) / Options (права, переводы) /
+  Tables / Main menu. После экспорта — таблица результата и «Import it into a stand now».
+- **Import data**: стенд → архив (недавние и `<папка настроек>\data\*.zip`) → состав архива → CstGate → insert/upsert →
+  уникальные конфликты stop/skip → **dry run всегда** → таблица (в архиве / новых / обновлено / примечания) или
+  проблемы → «Write into X?» (по умолчанию No) → запись, work dir запоминается.
+- **Restore data**: стенд → только бекапы, сделанные **на этом стенде** → подтверждение → откат.
+
+Файлы: планы — `<папка настроек>\plans\`, архивы — `data\`, work dir импорта — рядом с архивом; списки недавних — в
+`cst.ui-state.json` (`RecentPlans`, `RecentDataArchives`, `RecentDataWorkDirs`).
+
+**Найдено сценарием и исправлено**: `db-restore` не проверял, что бекап сделан на этом стенде. В сценарии Restore в
+списке стендов первым стоял последний приёмник, `Down` выбрал dev вместо test, и restore удалил на dev две строки
+UtkCstClient с теми же Id (их сразу вернул импорт исходного архива dev, контрольная сумма совпала). Теперь
+`db-restore`/Restore data отказывается от чужого бекапа (`restore-db.json` → TargetUrl ≠ стенд, exit 2), а UI
+показывает только бекапы выбранного стенда. Та же проверка добавлена в `restore` схем (`Transfer\Restorer`:
+`restore.json` → `targetUrl`; чужой бекап → exit 2, бекап старого cst без `targetUrl` — предупреждение) и в список
+Restore главного меню.
+
+Сценарии (`tests\ui-scenarios`, прогнаны на dev/test): `data-export.keys` (браузеры, смена режима, Save plan, Export
+archive), `data-import.keys` (dry run на dev, запись отклонена, Restore без бекапов), `data-import-write.keys` (запись
+2 строк на test и Restore data — test вернулся к исходной сумме). Регресс: `lang-uk.keys`, `export-summary.keys`.
+Для сценариев в настройках не должно быть недоступных стендов (bank из environments.json мешает: первый в списке).
 
 ## 2. Доступ к данным через стандартные сервисы (до решения о CstGate; остаётся для db-tables)
 

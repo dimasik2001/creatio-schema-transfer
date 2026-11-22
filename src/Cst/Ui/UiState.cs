@@ -20,6 +20,10 @@ public sealed class UiState
     public List<string> RecentLists { get; set; } = [];
     public List<string> RecentArchives { get; set; } = [];
     public List<string> RecentWorkDirs { get; set; } = [];
+    /// <summary>Table data transfer: saved plans, data archives and import work dirs (restore-db.json).</summary>
+    public List<string> RecentPlans { get; set; } = [];
+    public List<string> RecentDataArchives { get; set; } = [];
+    public List<string> RecentDataWorkDirs { get; set; } = [];
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -42,6 +46,7 @@ public sealed class UiState
             foreach (var k in s.Mappings.Keys.ToList())
                 s.Mappings[k] = new Dictionary<string, string>(s.Mappings[k] ?? [], StringComparer.OrdinalIgnoreCase);
             s.RecentLists ??= []; s.RecentArchives ??= []; s.RecentWorkDirs ??= [];
+            s.RecentPlans ??= []; s.RecentDataArchives ??= []; s.RecentDataWorkDirs ??= [];
             return s;
         }
         catch (Exception ex)

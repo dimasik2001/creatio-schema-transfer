@@ -21,11 +21,24 @@ public sealed class Restorer(CreatioClient client)
 {
     public static string InfoPath(string workDir) => Path.Combine(workDir, "restore.json");
 
+    /// <summary>The stand an import's backup was made on; null when restore.json is missing, unreadable or older.</summary>
+    public static string? BackupStand(string workDir)
+    {
+        try { return JsonNode.Parse(File.ReadAllText(InfoPath(workDir)))?["targetUrl"]?.ToString(); }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return null; }
+    }
+
     public async Task<RestoreResult> RestoreAsync(string dir, bool noCompile)
     {
         var infoPath = InfoPath(dir);
         if (!File.Exists(infoPath)) throw new ArgumentException($"{infoPath} not found.");
         var info = JsonNode.Parse(File.ReadAllText(infoPath))!;
+        // The backup belongs to one stand: on another one it would overwrite that stand's schemas, rows and files.
+        var stand = info["targetUrl"]?.ToString();
+        if (string.IsNullOrWhiteSpace(stand))
+            Log.Warn($"{infoPath} does not say which stand it was made on (older cst); make sure it is {client.Url}.");
+        else if (!Data.DataImporter.SameStand(stand, client.Url))
+            throw new TransferException([$"This backup was made on {stand}, not on {client.Url}. Restore it on that stand."]);
         JsonObject[] Arr(string key) => info[key]?.AsArray().OfType<JsonObject>().ToArray() ?? [];
         var schemaBackups = Arr("schemaBackups");
         var sqlBackups = Arr("sqlBackups");

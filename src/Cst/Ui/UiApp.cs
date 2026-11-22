@@ -83,7 +83,7 @@ public sealed class UiApp
             Console.WriteLine(F("An import was running; its backups and restore.json are in {0} (main menu → Restore).", Path.GetDirectoryName(logFile)));
     }
 
-    private const string Export = "Export", Import = "Import", Restore = "Restore", Language = "Language", Quit = "Quit";
+    private const string Export = "Export", Import = "Import", Restore = "Restore", Data = "Data", Language = "Language", Quit = "Quit";
 
     private async Task<int> MainLoopAsync()
     {
@@ -91,7 +91,7 @@ public sealed class UiApp
         {
             AnsiConsole.Clear();
             Title();
-            var col = NameColumn(T("Export"), T("Import"), T("Restore"), T("Language"));
+            var col = NameColumn(T("Export"), T("Import"), T("Restore"), T("Table data"), T("Language"));
             var choice = AnsiConsole.Prompt(Select<string>()
                 .Title(T("What do you want to do?"))
                 .UseConverter(c => c switch
@@ -99,10 +99,11 @@ public sealed class UiApp
                     Export => MenuLine(T("Export"), T("select schemas and files, save a list or an archive"), col),
                     Import => MenuLine(T("Import"), T("install an archive or a list into a stand"), col),
                     Restore => MenuLine(T("Restore"), T("roll a stand back from an import's backup"), col),
+                    Data => MenuLine(T("Table data"), T("rows of tables between stands (through CstGate)"), col),
                     Language => MenuLine(T("Language"), L.Language == UiLanguage.Ukrainian ? "Українська · English" : "English · Українська", col),
                     _ => Markup.Escape(T("Quit"))
                 })
-                .AddChoices(Export, Import, Restore, Language, Quit));
+                .AddChoices(Export, Import, Restore, Data, Language, Quit));
             try
             {
                 switch (choice)
@@ -110,6 +111,7 @@ public sealed class UiApp
                     case Export: await ExportAsync(); break;
                     case Import: await ImportAsync(); break;
                     case Restore: await RestoreAsync(); break;
+                    case Data: await new DataFlows(_envs, _state, _log, BaseDir, _settings.DbData).RunAsync(); break;
                     case Language: ChooseLanguage(); break;
                     default:
                         SaveState();
@@ -281,7 +283,9 @@ public sealed class UiApp
         if (target == null) return;
         Header(target, T("Restore"));
         const string typed = "\u0000typed", back = "\u0000back";
-        var dirs = _state.RecentWorkDirs.Where(d => File.Exists(Transfer.Restorer.InfoPath(d))).ToList();
+        // Only backups made on this stand (older ones without the stand in restore.json are still offered).
+        var dirs = _state.RecentWorkDirs.Where(d => File.Exists(Transfer.Restorer.InfoPath(d))
+            && (Transfer.Restorer.BackupStand(d) is not { } url || Cst.Data.DataImporter.SameStand(url, target.Client.Url))).ToList();
         var choice = AnsiConsole.Prompt(Select<string>()
             .Title(T("Restore from which import work dir?"))
             .PageSize(12)

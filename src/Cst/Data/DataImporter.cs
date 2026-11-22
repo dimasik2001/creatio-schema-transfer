@@ -341,6 +341,20 @@ public sealed class DataImporter(CreatioClient client)
 
     private readonly Dictionary<string, List<JsonArray>> _pendingFiles = [];
 
+    /// <summary>Same stand address (scheme, host, port, path; case and a trailing slash ignored).</summary>
+    public static bool SameStand(string a, string b) =>
+        string.Equals(a.Trim().TrimEnd('/'), b.Trim().TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>The stand a data import backup belongs to (null when the work dir has no readable restore-db.json).</summary>
+    public static string? BackupStand(string workDir)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<DataRestoreInfo>(File.ReadAllText(DataRestoreInfo.PathIn(workDir)), DataArchive.Json)?.TargetUrl;
+        }
+        catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException) { return null; }
+    }
+
     /// <summary>Unique indexes (not the primary key, no filter/expression) of target tables.</summary>
     private async Task<Dictionary<string, List<UniqueIndex>>> LoadUniqueIndexesAsync(IEnumerable<string> tables)
     {
@@ -452,6 +466,9 @@ public sealed class DataImporter(CreatioClient client)
         var path = DataRestoreInfo.PathIn(workDir);
         var info = JsonSerializer.Deserialize<DataRestoreInfo>(await Io.ReadAllTextAsync(path), DataArchive.Json)
                    ?? throw new FormatException($"{path}: bad restore info.");
+        // The backup holds Ids of one stand: on another stand it would delete that stand's rows with the same Ids.
+        if (!SameStand(info.TargetUrl, client.Url))
+            throw new Transfer.TransferException([$"This backup was made on {info.TargetUrl}, not on {client.Url}. Restore it on that stand."]);
         var gi = await _gate.InfoAsync();
         _sql = new SqlDialect(gi.Engine ?? "MSSql");
         var log = new List<string>();

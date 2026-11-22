@@ -1,0 +1,55 @@
+# Table data export from dev: menu, gate check (installed), packages browser, tables browser (a mode change),
+# summary, Save plan, Export archive, back out to the main menu. Writes plans\ and data\ in the settings folder.
+wait:main menu
+Down
+Down
+Down                  # Table data
+Enter
+wait:table data menu
+Enter                 # Export data
+wait:stand list
+Enter                 # dev (first / last source)
+wait:what to export (gate answered)
+Enter                 # Select
+wait:packages browser
+text:utkcstsource
+Space                 # mark UtkCstSource
+F2
+wait:tables browser
+Down
+Down
+Down                  # UtkCstUntouched
+Space                 # full -> top N
+F2
+wait:summary
+Down                  # Save plan
+Enter
+Enter                 # default plan path
+wait:saved
+Enter                 # any key
+wait:summary again
+Enter                 # Export archive
+Enter                 # default archive path
+wait:manifest + what next
+Enter                 # Back to the plan
+wait:summary after export
+Down
+Down
+Down
+Down
+Down
+Down
+Down                  # Main menu (Export, Save, Mode, Refs, Children, Options, Tables, Main menu)
+Enter
+wait:table data menu again
+Down
+Down
+Down                  # ← Back
+Enter
+wait:main menu again
+Down
+Down
+Down
+Down
+Down                  # Quit
+Enter
