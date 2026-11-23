@@ -93,6 +93,28 @@ public sealed class DbCatalog(GateClient gate, SqlDialect dialect)
         return result;
     }
 
+    /// <summary>Which of the given names are views of the current schema with an "Id" column
+    /// (lookups like VwSysSchemaInfo): rows can be looked up there, but nothing is ever written to them.</summary>
+    public async Task<HashSet<string>> LoadViewsWithIdAsync(IEnumerable<string> names)
+    {
+        var list = names.Where(SqlDialect.IsSafeName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < list.Count; i += 300)
+        {
+            var inList = string.Join(",", list.Skip(i).Take(300).Select(n => "'" + n + "'"));
+            var sql = dialect.Pg
+                ? "SELECT t.table_name FROM information_schema.tables t JOIN information_schema.columns c " +
+                  "ON c.table_schema = t.table_schema AND c.table_name = t.table_name AND c.column_name = 'Id' " +
+                  $"WHERE t.table_type = 'VIEW' AND t.table_schema = current_schema() AND t.table_name IN ({inList})"
+                : "SELECT t.TABLE_NAME FROM INFORMATION_SCHEMA.TABLES t JOIN INFORMATION_SCHEMA.COLUMNS c " +
+                  "ON c.TABLE_SCHEMA = t.TABLE_SCHEMA AND c.TABLE_NAME = t.TABLE_NAME AND c.COLUMN_NAME = 'Id' " +
+                  $"WHERE t.TABLE_TYPE = 'VIEW' AND t.TABLE_SCHEMA = SCHEMA_NAME() AND t.TABLE_NAME IN ({inList})";
+            var res = await gate.QueryAsync(sql);
+            foreach (var r in res.Rows) result.Add(Str(r[0]));
+        }
+        return result;
+    }
+
     internal static string Str(JsonNode? n) => n is JsonValue v && v.TryGetValue<string>(out var s) ? s : n?.ToJsonString() ?? "";
     internal static long Int(JsonNode? n) => n is JsonValue v ? (v.TryGetValue<long>(out var l) ? l : v.TryGetValue<string>(out var s) && long.TryParse(s, out var p) ? p : 0) : 0;
 }

@@ -76,6 +76,7 @@ public sealed class DataImporter(CreatioClient client)
 {
     private readonly GateClient _gate = new(client);
     private SqlDialect _sql = null!;
+    private HashSet<string> _refViews = new(StringComparer.OrdinalIgnoreCase);
 
     private sealed class Plan
     {
@@ -108,7 +109,10 @@ public sealed class DataImporter(CreatioClient client)
         // 1. Target structure.
         var entries = manifest.Tables.Where(t => t.Rows > 0).ToList();
         var refTables = entries.SelectMany(t => t.Edges.Select(e => e.RefTable));
-        var target = await new DbCatalog(_gate, _sql).LoadColumnsAsync(entries.Select(t => t.Name).Concat(refTables));
+        var catalog = new DbCatalog(_gate, _sql);
+        var target = await catalog.LoadColumnsAsync(entries.Select(t => t.Name).Concat(refTables));
+        // Lookups that are views on the target (VwSysSchemaInfo, ...): existing rows are checked there too.
+        _refViews = await catalog.LoadViewsWithIdAsync(refTables.Where(t => !target.ContainsKey(t)));
         var plans = new List<Plan>();
         foreach (var e in entries)
         {
@@ -400,7 +404,7 @@ public sealed class DataImporter(CreatioClient client)
     {
         var col = "s." + _sql.Q(e.Column);
         var exists = new List<string>();
-        if (target.ContainsKey(e.RefTable))
+        if (target.ContainsKey(e.RefTable) || _refViews.Contains(e.RefTable))
             exists.Add($"EXISTS (SELECT 1 FROM {_sql.Q(e.RefTable)} r WHERE r.{_sql.Q("Id")} = {col})");
         if (byName.TryGetValue(e.RefTable, out var rp) && rp.HasId)
             exists.Add($"EXISTS (SELECT 1 FROM {_sql.Temp(rp.Stage)} x WHERE x.{_sql.Q("Id")} = {col})");

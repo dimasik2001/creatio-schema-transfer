@@ -131,6 +131,8 @@ cst db-sql     --env dev --sql "SELECT TOP 5 * FROM Account"  # ad-hoc SQL throu
 - `insert` (default) adds only rows whose Id is new; `upsert` also overwrites existing rows. Translation and
   rights rows are matched by record + culture / role + operation, not by Id.
 - Reference cycles are broken at a nullable column, which is filled in after the inserts.
+- A lookup that is a view on the target (e.g. `VwSysSchemaInfo`, keyed by the schema UId) is checked there:
+  rows it already shows count as present. Views are never written to.
 - `db-restore` deletes the inserted rows and puts back the previous versions of updated rows. Rows deleted by
   FK cascades on the target do not come back. Both restores (`restore`, `db-restore`) refuse a backup made
   on another stand.
